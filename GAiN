@@ -1,0 +1,721 @@
+#!/usr/bin/env python3
+
+### This is the inital data pipeline step
+import numpy as np
+import pandas as pd
+from scipy import stats
+
+from tensorflow.python.util import deprecation
+deprecation._PRINT_DEPRECATION_WARNINGS = False
+
+from keras.engine.topology import Layer
+from keras.layers import Input, Dense, Dropout, LeakyReLU, Activation, Lambda, BatchNormalization
+from keras.models import Model, load_model
+from keras.optimizers import RMSprop
+import keras.backend as K
+from keras.callbacks import TensorBoard
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
+
+import warnings
+import argparse as argp
+import sys
+import os
+
+warnings.filterwarnings('ignore', message='Discrepancy between')
+LATENT_DIM = 1500
+DEFAULT_NOISE_RATE = 0.35
+CHECKPOINTS_DIR = '../checkpoints'   #this is where to edit
+quiet = False
+
+class MinibatchDiscrimination(Layer):
+    def __init__(self, units=5, units_out=10, **kwargs):
+        self._w = None
+        self._units = units
+        self._units_out = units_out
+        super(MinibatchDiscrimination, self).__init__(**kwargs)
+
+    def build(self, input_shape):
+        self._w = self.add_weight(name='w',
+                                  shape=(input_shape[1], self._units * self._units_out),
+                                  initializer='uniform',
+                                  trainable=True
+                                  )
+        super(MinibatchDiscrimination, self).build(input_shape)
+
+    def call(self, x, **kwargs):
+        h = K.dot(x, self._w)  # Shape=(batch_size, units * units_out)
+        h = K.reshape(h, (-1, self._units, self._units_out))  # Shape=(batch_size, units, units_out)
+        h_t = K.permute_dimensions(h, [1, 2, 0])  # Shape=(units, units_out, batch_size)
+        diffs = h[..., None] - h_t[None, ...]  # Shape=(batch_size, units, units_out, batch_size)
+        abs_diffs = K.sum(K.abs(diffs), axis=1)  # Shape=(batch_size, units_out, batch_size)
+        features = K.sum(K.exp(-abs_diffs), axis=-1)  # Shape=(batch_size, units_out)
+        return features
+
+    def compute_output_shape(self, input_shape):
+        return input_shape[0], self._units_out
+
+
+class gGAN:
+    def __init__(self, data, gene_symbols, latent_dim=LATENT_DIM, noise_rate=DEFAULT_NOISE_RATE,
+                 discriminate_batch=False,
+                 max_replay_len=None):
+        """
+        Initialize GAN
+        :param data: expression matrix. Shape=(nb_samples, nb_genes)
+        :param gene_symbols: list of gene symbols. Shape=(nb_genes,)
+        :param latent_dim: number input noise units for the generator
+        :param noise_rate: rate of noise being added in the gene-wise layer of the generator (psi/nb_genes).
+        :param discriminate_batch: whether to discriminate a whole batch of samples rather than discriminating samples
+               individually. NOTE: Not implemented
+        :param max_replay_len: size of the replay buffer
+        """
+        self._latent_dim = latent_dim
+        self._noise_rate = noise_rate
+        self._data = data
+        self._gene_symbols = gene_symbols
+        self._nb_samples, self._nb_genes = data.shape
+        self._discriminate_batch = discriminate_batch
+        self._max_replay_len = max_replay_len
+
+        # Following parameter and optimizer set as recommended in paper
+        self.n_critic = 5
+        self.clip_value = 0.01
+        optimizer = RMSprop(lr=0.00005)
+
+        # Build and compile the discriminator
+        self.discriminator = self._build_discriminator()
+        if self._discriminate_batch:
+            # loss = self._minibatch_binary_crossentropy
+            raise NotImplementedError
+
+        self.discriminator.compile(loss=self.wasserstein_loss,
+                                   optimizer=optimizer)
+        self._gradients_discr = self._gradients_norm(self.discriminator)
+
+        # Build the generator
+        self.generator = self._build_generator()
+        z = Input(shape=(self._latent_dim,))
+        gen_out = self.generator(z)
+
+        # Build the combined model
+        self.discriminator.trainable = False
+        valid = self.discriminator(gen_out)
+        self.combined = Model(z, valid)
+        self.combined.compile(loss=self.wasserstein_loss,
+                              optimizer=optimizer)
+        self._gradients_gen = self._gradients_norm(self.combined)
+
+        # Initialize replay buffer
+        noise = np.random.normal(0, 1, (32, self._latent_dim))
+        x_fake = self.generator.predict(noise)
+        self._replay_buffer = np.array(x_fake)
+
+    def wasserstein_loss(self, y_true, y_pred):
+        return K.mean(y_true * y_pred)
+
+    def _build_generator(self):
+        """
+        Build the generator
+        """
+        noise = Input(shape=(self._latent_dim,))
+        h = noise
+        # h = Dropout(0.5)(h)
+        h = Dense(1000)(h)
+        h = LeakyReLU(0.3)(h)
+        h = Dropout(0.1)(h)
+        h = Dense(50)(h)
+        h = LeakyReLU(0.3)(h)
+        h = Dropout(0.1)(h)
+        h = Dense(20)(h)
+        h = LeakyReLU(0.3)(h)
+        h = Dense(50)(h)
+        h = LeakyReLU(0.3)(h)
+        h = Dropout(0.1)(h)
+        h = Dense(1000)(h)
+        h = LeakyReLU(0.3)(h)
+        h = Dropout(0.1)(h)
+        h = Dense(self._nb_genes)(h)
+        model = Model(inputs=noise, outputs=h)
+        if not quiet:
+            model.summary()
+        return model
+
+    def _build_discriminator(self):
+        """
+        Build the discriminator
+        """
+        expressions_input = Input(shape=(self._nb_genes,))
+        h = expressions_input
+        h = Dropout(0.3)(h)
+        h = MinibatchDiscrimination()(h)
+        h = Dense(2000)(h)
+        h = LeakyReLU(0.3)(h)
+        h = Dense(200)(h)
+        h = LeakyReLU(0.3)(h)
+        h = Dense(20)(h)
+        h = LeakyReLU(0.3)(h)
+        h = Dropout(0.3)(h)
+        h = Dense(1)(h)
+        model = Model(inputs=expressions_input, outputs=h)
+        if not quiet:
+            model.summary()
+        return model
+
+    @staticmethod
+    def _write_log(callback, names, logs, epoch):
+        """
+        Write log to TensorBoard callback
+        :param callback: TensorBoard callback
+        :param names: list of names for each log. Shape=(nb_logs,)
+        :param logs: list of scalars. Shape=(nb_logs,)
+        :param epoch: epoch number
+        """
+        for name, value in zip(names, logs):
+            summary = tf.Summary()
+            summary_value = summary.value.add()
+            summary_value.simple_value = value
+            summary_value.tag = name
+            callback.writer.add_summary(summary, epoch)
+            callback.writer.flush()
+
+    @staticmethod
+    def _gradients_norm(model):
+        """
+        Create Keras function to compute Euclidean norm of gradient vector
+        :param model: Keras model for which the norm will be computed
+        :return: Keras function to compute Euclidean norm of gradient vector
+        """
+        grads = K.gradients(model.total_loss, model.trainable_weights)
+        summed_squares = tf.stack([K.sum(K.square(g)) for g in grads])
+        norm = K.sqrt(K.sum(summed_squares))
+
+        input_tensors = [model.inputs[0],  # input data
+                         model.sample_weights[0],  # how much to weight each sample by
+                         model._targets[0],  # labels
+                         K.learning_phase(),  # train or test mode
+                         ]
+
+        return K.function(inputs=input_tensors, outputs=[norm])
+
+    def train(self, epochs, file_name=None, batch_size=32):
+        """
+        Trains the GAN
+        :param epochs: Number of epochs
+        :param file_name: Name of the .h5 file in checkpoints. If None, the model won't be saved
+        :param batch_size: Batch size
+        """
+        # Best score for correlation of distance gene matrices
+        best_gdxdz = 0
+
+        # Adversarial ground truths
+        valid = -np.ones((batch_size, 1))
+        fake = np.ones((batch_size, 1))
+
+        for epoch in range(epochs):
+
+            for _ in range(self.n_critic):
+                # ----------------------
+                #  Train Discriminator
+                # ----------------------
+
+                # Select random sample
+                idxs = np.random.randint(0, self._nb_samples, batch_size)
+                x_real = self._data.iloc[idxs, :]
+
+                # Sample noise and generate a batch of new images
+                noise = np.random.normal(0, 1, (batch_size, self._latent_dim))
+                x_fake = self.generate_batch(batch_size)  # self.generator.predict(noise)
+
+                # Train the discriminator (real classified as ones and generated as zeros)
+                d_loss_real = self.discriminator.train_on_batch(x_real, valid)
+                d_loss_fake = self.discriminator.train_on_batch(x_fake, fake)
+                d_loss = 0.5 * np.add(d_loss_real, d_loss_fake)
+
+                # Clip critic weights
+                for l in self.discriminator.layers:
+                    weights = l.get_weights()
+                    weights = [np.clip(w, -self.clip_value, self.clip_value) for w in weights]
+                    l.set_weights(weights)
+
+            # ----------------------
+            #  Train Generator
+            # ----------------------
+
+            # Train the generator
+            g_loss = self.combined.train_on_batch(noise, valid)
+
+            # ----------------------
+            #  Plot the progress
+            # ----------------------
+            if not quiet:
+                print('{} [D loss: {:.4f}] [G loss: {:.4f}]'.format(epoch, d_loss, g_loss))
+
+
+    def generate_batch(self, batch_size=32):
+        """
+        Generate a batch of samples using the generator
+        :param batch_size: Batch size
+        :return: Artificial samples generated by the generator. Shape=(batch_size, nb_genes)
+        """
+        noise = np.random.normal(0, 1, (batch_size, self._latent_dim))
+        pred = self.generator.predict(noise)
+
+        return pred
+
+    def discriminate(self, expr):
+        """
+        Discriminates a batch of samples
+        :param expr: expressions matrix. Shape=(nb_samples, nb_genes)
+        :return: for each sample, probability that it comes from the real distribution
+        """
+        return self.discriminator.predict(expr)
+
+    def save_model(self, name):
+        """
+        Saves model to CHECKPOINTS_DIR
+        :param name: model id
+        """
+        self.discriminator.trainable = True
+        self.discriminator.save('{}/discr/{}.h5'.format(CHECKPOINTS_DIR, name))
+        self.discriminator.trainable = False
+        for layer in self.discriminator.layers:  # https://github.com/keras-team/keras/issues/9589
+            layer.trainable = False
+        self.generator.save('{}/gen/{}.h5'.format(CHECKPOINTS_DIR, name), include_optimizer=False)
+        self.combined.save('{}/gan/{}.h5'.format(CHECKPOINTS_DIR, name))
+
+    def load_model(self, name):
+        """
+        Loads model from CHECKPOINTS_DIR
+        :param name: model id
+        """
+        self.discriminator = load_model('{}/discr/{}.h5'.format(CHECKPOINTS_DIR, name),
+                                        custom_objects={'MinibatchDiscrimination': MinibatchDiscrimination,
+                                                        'wasserstein_loss': self.wasserstein_loss})
+        self.generator = load_model('{}/gen/{}.h5'.format(CHECKPOINTS_DIR, name),
+                                    custom_objects={'GeneWiseNoise': GeneWiseNoise,
+                                                    'wasserstein_loss': self.wasserstein_loss},
+                                    compile=False)
+        self.combined = load_model('{}/gan/{}.h5'.format(CHECKPOINTS_DIR, name),
+                                   custom_objects={'GeneWiseNoise': GeneWiseNoise,
+                                                   'MinibatchDiscrimination': MinibatchDiscrimination,
+                                                   'wasserstein_loss': self.wasserstein_loss})
+        self._latent_dim = self.generator.input_shape[-1]
+
+
+def normalize(expr, kappa=1):
+    """
+    Normalizes expressions to make each gene have mean 0 and std kappa^-1
+    :param expr: matrix of gene expressions. Shape=(nb_samples, nb_genes)
+    :param kappa: kappa^-1 is the gene std
+    :return: normalized expressions
+    """
+    mean = np.mean(expr, axis=0)
+    std = np.std(expr, axis=0)
+    std[std==0] = np.nan
+    #import pdb; pdb.set_trace()
+    return (expr - mean) / (kappa * std)
+
+
+def restore_scale(expr, mean, std):
+    """
+    Makes each gene j have mean_j and std_j
+    :param expr: matrix of gene expressions. Shape=(nb_samples, nb_genes)
+    :param mean: vector of gene means. Shape=(nb_genes,)
+    :param std: vector of gene stds. Shape=(nb_genes,)
+    :return: Rescaled gene expressions
+    """
+    return expr * std + mean
+
+
+def clip_outliers(expr, gene_means=None, gene_stds=None, std_clip=2):
+    """
+    Clips gene expressions of samples in which the gene deviates more than std_clip standard deviations from the gene mean.
+    :param expr: np.array of expression data with Shape=(nb_samples, nb_genes)
+    :param gene_means: np.array with the mean of each gene. Shape=(nb_genes,). If None, it is computed from expr
+    :param gene_stds: np.array with the std of each gene. Shape=(nb_genes,). If None, it is computed from expr
+    :param std_clip: Number of standard deviations for which the expression of a gene will be clipped
+    :return: clipped expression matrix
+    """
+    nb_samples, nb_genes = expr.shape
+
+    # Find gene means and stds
+    if gene_means is None:
+        gene_means = np.mean(expr, axis=0)
+    if gene_stds is None:
+        gene_stds = np.std(expr, axis=0)
+
+    # Clip samples for which a gene is not within [gene_mean - std_clip * gene_std, gene_mean + std_clip * gene_std]
+    clipped_expr = np.array(expr)
+    for sample_idx in range(nb_samples):
+        for gene_idx in range(nb_genes):
+            if expr[sample_idx, gene_idx] > (gene_means + std_clip * gene_stds)[gene_idx]:
+                clipped_expr[sample_idx, gene_idx] = (gene_means + std_clip * gene_stds)[gene_idx]
+            elif expr[sample_idx, gene_idx] < (gene_means - std_clip * gene_stds)[gene_idx]:
+                clipped_expr[sample_idx, gene_idx] = (gene_means - std_clip * gene_stds)[gene_idx]
+
+    # Clip samples below zero to zero
+    clipped_expr2 = np.array(clipped_expr)
+    for sample_idx in range(nb_samples):
+        for gene_idx in range(nb_genes):
+            if expr[sample_idx, gene_idx] < 0:
+                clipped_expr2[sample_idx, gene_idx] = 0
+
+    return clipped_expr2
+
+
+def formatdataforgen(df, condition, num_samples_to_build_on, seed=None):
+    df = df.T
+    df.columns = df.iloc[0]
+    df.drop(df.index[0])
+    y = df["Cancer ID"]
+    # Further formating after subsetting class
+    norecur = df.loc[df['Cancer ID'] == condition]   # Select only one class to condition GAN 
+    norecur_edit = norecur.drop([ 'Cancer ID'], axis=1)  # Drop Y column
+    gene_symbols = norecur_edit.columns # Save Gene Sympbols for later
+    expr_train = norecur_edit # re-naming
+    expr_train = expr_train.sample(n = num_samples_to_build_on, random_state=seed) # Random Sample of patients to build GAN on
+    if not quiet:
+        print('Samples for condition {}:\n'.format(condition)+
+                '\n'.join(expr_train.index.to_list()))
+    # Normalize, Drop NAs and Drop Zero columns after normalization
+    expr_train.isnull().values.any() #Find any NAs
+    data2 = expr_train[(expr_train.T != 0).any()] # Drop any rows with all zeros
+    #import pdb; pdb.set_trace()
+    data = normalize(data2, kappa=2)
+    df_temp2 = data.dropna(axis='columns') #Drop NAs 
+    return (df_temp2, gene_symbols, expr_train)
+
+
+def gensynthdata (ggan, sizeofset, test2, gene_symbols,todrop):
+    # Generate  synthetic data
+    size = sizeofset # Choose the size of the synthetic dataset
+    mean = np.mean(test2, axis=0)
+    std = np.std(test2, axis=0)
+    r_min = test2.min()
+    r_max = test2.max()
+    expr = ggan.generate_batch(size)
+    expr = normalize(expr)
+    mean_array = mean.values
+    std_array = std.values
+    expr = expr * mean_array + std_array
+    synth_expression = clip_outliers(expr, gene_means=None, gene_stds=None, std_clip=2)
+    almost = synth_expression.T
+    gslist = gene_symbols.tolist()
+    todrop1 = todrop.tolist()
+    final_gs = [x for x in gslist if x not in todrop1]
+    condition0 = almost
+    genes_condition_0 = final_gs
+    return (condition0, genes_condition_0)
+
+
+def formatforsigtestingbycondition(condition11, genes_condition_11, gene_symbols) :
+    # Format Condition 0 Generative Data for Significance Testing
+    test1 = pd.DataFrame(condition11)
+    test2 = pd.DataFrame(genes_condition_11)
+    test3 = pd.concat([test2, test1], axis=1, sort=False, ignore_index=True)
+    gslist = gene_symbols.tolist()
+    empty_gs1 = [x for x in gslist if x not in genes_condition_11]
+    test5 = pd.DataFrame(empty_gs1)
+    dim2 = len(test3.columns) - 1
+    s = (len(empty_gs1), dim2)
+    concat_zeros= np.zeros(s)
+    con_zeros = pd.DataFrame(concat_zeros)
+    test6 = pd.concat([test5, con_zeros], axis=1, sort=False, ignore_index=True)
+    test7 = pd.concat([test3.T, test6.T], axis=1)
+    test8 = test7.T
+    stored_Condition0 = test8
+    return(stored_Condition0)
+
+
+# Perform signifiance testing
+def performsigtesting(sorted_condition_0,sorted_condition_1) :
+    pvalues = []
+    for i in range(len(sorted_condition_1.index)):
+        expr0 = sorted_condition_0.iloc[i,:].to_numpy()
+        expr1 = sorted_condition_1.iloc[i,:].to_numpy()
+        #import pdb; pdb.set_trace()
+        try:
+            p = stats.ttest_ind(expr0, expr1, equal_var=False).pvalue
+        except:
+            p = np.nan
+        pvalues.append(p)
+    return(pvalues)
+
+
+def Cleanupsiggenelist (inputFile, pvalues, sorted_condition_1, alpha, minGE, minfold) : # Make a sorted list of pvalues and gene-names
+    pvalues1 = np.asarray(pvalues)
+    sorted_symbols = np.asarray(sorted_condition_1.index)
+    ss = pd.DataFrame(sorted_symbols)
+    pv1 = pd.DataFrame(pvalues1) 
+    final_test_df = pd.concat([ss, pv1], axis=1,ignore_index=True) #Join the gene names and the pvalues
+    final_test_df = final_test_df.set_index(0)      # Make gene names the index
+    #Filter by min gene expression of 10
+    #os.chdir("C:\\Users\\mrwwa\\OneDrive\\Documents")
+    df00 = pd.read_csv(inputFile)
+    df00 = df00.T
+    df00.columns = df00.iloc[0]
+    df00.drop(df00.index[0])
+    Real_Condition_100 = df00.loc[df00['Cancer ID'] == 1] 
+    Real_Condition_100 = Real_Condition_100.drop([ 'Cancer ID'], axis=1)  # Drop Y column
+    Real_Condition_000 = df00.loc[df00['Cancer ID'] == 0] 
+    Real_Condition_000 = Real_Condition_000.drop([ 'Cancer ID'], axis=1)  # Drop Y column
+    Condition000meanvalues= Real_Condition_000.T.sum(axis=1)/Real_Condition_000.T.shape[1]
+    Condition100meanvalues= Real_Condition_100.T.sum(axis=1)/Real_Condition_100.T.shape[1]
+    delta_meanvalues= Condition000meanvalues - Condition100meanvalues
+    delta_meanvalues_df= pd.DataFrame(data=delta_meanvalues)
+    Condition000meanvalues_n= Condition000meanvalues.to_numpy()
+    Condition100meanvalues_n= Condition100meanvalues.to_numpy()
+    temp000_n=  np.log2(Condition000meanvalues_n)
+    try12= np.nan_to_num(temp000_n)
+    temp100_n=  np.log2(Condition100meanvalues_n)
+    try13= np.nan_to_num(temp100_n)
+    log2fc= try13 - try12
+    fold_change_df= pd.DataFrame(data=log2fc)
+    fold_change_df = fold_change_df.set_index(delta_meanvalues_df.index)
+    delta_meanvalues_df= pd.DataFrame(data=delta_meanvalues)
+    final_test_df_panddelt = pd.merge(final_test_df, delta_meanvalues_df, left_index=True, right_index=True)
+    final_test_df_panddelt2 = pd.merge(final_test_df_panddelt, fold_change_df, left_index=True, right_index=True)
+    final_test_df_panddelt2.columns = ['pvalues','delta','foldchange']
+    sorted_ftdf_temp = final_test_df_panddelt2.sort_values(by=['delta']) #Sort by delta
+    sig_delta = sorted_ftdf_temp.loc[abs(sorted_ftdf_temp['delta']) > minGE ] #Edit by delta
+    sig_delta2 = sig_delta.loc[abs(sig_delta['foldchange']) > minfold ] #Edit by fold change
+    final_test_df_sig = sig_delta2.loc[sig_delta2['pvalues'] < alpha ] #Edit by pvalues
+    return(final_test_df_sig, final_test_df)
+
+
+def Getrealsiggenelist (inputFile, df, alpha, minGE, minfold) :
+# Re-load Real Data and separate it by condition 1 and 0
+    df = df.T
+    df.columns = df.iloc[0]
+    df.drop(df.index[0])
+    y = df["Cancer ID"]
+    Real_Condition_1 = df.loc[df['Cancer ID'] == 1] 
+    Real_Condition_1 = Real_Condition_1.drop([ 'Cancer ID'], axis=1)  # Drop Y column
+    Real_Condition_0 = df.loc[df['Cancer ID'] == 0] 
+    Real_Condition_0 = Real_Condition_0.drop([ 'Cancer ID'], axis=1)  # Drop Y column
+    gene_symbols = Real_Condition_0.columns # Save Gene Sympbols for later
+    # Transpose data so previous loop works the same way
+    rc1df = Real_Condition_1.T
+    rc0df = Real_Condition_0.T
+    # Perform signifiance testing
+    pvalues_real = []
+    for i in range(len(rc1df.index)):
+        expr0 = rc0df.iloc[i,:].to_numpy()
+        expr1 = rc1df.iloc[i,:].to_numpy()
+        try:
+            p_r = stats.ttest_ind(expr0, expr1, equal_var=False).pvalue
+        except:
+            p = np.nan 
+        pvalues_real.append(p_r)
+           
+    # Make a sorted list of pvalues and gene-names and filter by gene expression too
+    pvalues1 = np.asarray(pvalues_real)
+    sorted_symbols = np.asarray(rc1df.index)
+    ss = pd.DataFrame(sorted_symbols)
+    pv1 = pd.DataFrame(pvalues1) 
+    final_test_df = pd.concat([ss, pv1], axis=1,ignore_index=True) #Join the gene names and the pvalues
+    final_test_df = final_test_df.set_index(0)      # Make gene names the index
+    #Filter by min gene expression of 10
+     #Filter by min gene expression difference of 10 and a mean fold change of >2
+    #os.chdir("C:\\Users\\mrwwa\\OneDrive\\Documents")
+    df00 = pd.read_csv(inputFile)
+    df00 = df00.T
+    df00.columns = df00.iloc[0]
+    df00.drop(df00.index[0])
+    Real_Condition_100 = df00.loc[df00['Cancer ID'] == 1] 
+    Real_Condition_100 = Real_Condition_100.drop([ 'Cancer ID'], axis=1)  # Drop Y column
+    Real_Condition_000 = df00.loc[df00['Cancer ID'] == 0] 
+    Real_Condition_000 = Real_Condition_000.drop([ 'Cancer ID'], axis=1)  # Drop Y column
+    Condition000meanvalues= Real_Condition_000.T.sum(axis=1)/Real_Condition_000.T.shape[1]
+    Condition100meanvalues= Real_Condition_100.T.sum(axis=1)/Real_Condition_100.T.shape[1]
+    delta_meanvalues= Condition000meanvalues - Condition100meanvalues
+    delta_meanvalues_df= pd.DataFrame(data=delta_meanvalues)
+    Condition000meanvalues_n= Condition000meanvalues.to_numpy()
+    Condition100meanvalues_n= Condition100meanvalues.to_numpy()
+    temp000_n=  np.log2(Condition000meanvalues_n)
+    try12= np.nan_to_num(temp000_n)
+    temp100_n=  np.log2(Condition100meanvalues_n)
+    try13= np.nan_to_num(temp100_n)
+    log2fc= try13 - try12
+    fold_change_df= pd.DataFrame(data=log2fc)
+    fold_change_df = fold_change_df.set_index(delta_meanvalues_df.index)
+    delta_meanvalues_df= pd.DataFrame(data=delta_meanvalues)
+    final_test_df_panddelt = pd.merge(final_test_df, delta_meanvalues_df, left_index=True, right_index=True)
+    final_test_df_panddelt2 = pd.merge(final_test_df_panddelt, fold_change_df, left_index=True, right_index=True)
+    final_test_df_panddelt2.columns = ['pvalues','delta','foldchange']
+    sorted_ftdf_temp = final_test_df_panddelt2.sort_values(by=['delta']) #Sort by delta
+    sig_delta = sorted_ftdf_temp.loc[abs(sorted_ftdf_temp['delta']) > minGE ] #Edit by delta
+    sig_delta2 = sig_delta.loc[abs(sig_delta['foldchange']) > minfold ] #Edit by fold change
+    final_test_df_sig_real = sig_delta2.loc[sig_delta2['pvalues'] < alpha ] #Edit by pvalues
+    return(final_test_df_sig_real)
+
+
+def getfinaloutput(outName, final_test_df_sig, final_test_df_sig_real, final_test_df, geneSymbols):
+    #Compare sig gene lists from real and generated data
+    final_test_df = final_test_df
+    final_test_df_sig = final_test_df_sig
+    generative_sig_list = final_test_df_sig.index
+    real_sig_list = final_test_df_sig_real.index
+    def intersection(lst1, lst2): 
+        lst3 = [value for value in lst1 if value in lst2] 
+        return lst3 
+    intersection_of_lists = intersection(generative_sig_list, real_sig_list)
+
+    # Get Raw Output
+    overlap = np.count_nonzero(np.asarray(intersection_of_lists))
+    synth = np.count_nonzero(np.asarray(generative_sig_list))
+    real = np.count_nonzero(np.asarray(real_sig_list))
+    synth_alone = abs(synth - overlap)
+    real_alone = abs(real - overlap)
+
+    TP = overlap 
+    FP = synth_alone 
+    FN = real_alone 
+    total_genes = np.count_nonzero(np.asarray(geneSymbols))
+    TN = total_genes - synth 
+
+    # Sensitivity, hit rate, recall, or true positive rate
+    TPR = np.float64(TP)/(TP+FN)
+    # Specificity or true negative rate
+    TNR = np.float64(TN)/(TN+FP) 
+    # Precision or positive predictive value
+    PPV = np.float64(TP)/(TP+FP)
+    # Negative predictive value
+    NPV = np.float64(TN)/(TN+FN)
+    # Fall out or false positive rate
+    FPR = np.float64(FP)/(FP+TN)
+    # False negative rate
+    FNR = np.float64(FN)/(TP+FN)
+    # False discovery rate
+    FDR = np.float64(FP)/(TP+FP)
+    # Overall accuracy
+    ACC = np.float64(TP+TN)/(TP+FP+FN+TN)
+
+    print('Sensitivity=',TPR)
+    print('Specificity=',TNR)
+    print('PPV=',PPV)
+    print('NPV=',NPV)
+    print('False Positive Rate=',FPR)
+    print('False Negative Rate=',FNR)
+    print('False Discovery Rate=',FDR)
+    print('Overall Accuracy=',ACC)
+    # Generate Accuracy Measurements and graphical output
+    venn2(subsets = (synth_alone, real_alone, overlap), set_labels = ('Synthetic', 'Real'), set_colors=('red', 'skyblue'))
+    plt.title('Venn')
+    plt.savefig(outName+'_venn.pdf')
+    return(TPR,TNR,PPV,NPV,FPR,FNR,FDR,ACC)
+
+
+def runGAN(inputFile, outName, numberC0, numberC1, epochs, batchsize0, batchsize1, alphaGAN, minGE, minfold, seed=None):
+    """
+    runGAN : Performs diff exp testing between GAN gene lists
+    :param numberC0: Number of samples to select from test condition 0
+    :param numberC1: Number of samples to select from test condition 1
+    :param epochs: Number of epochs to train GAN
+    :param batchsize0: Number of synthetic samples to generate for condition 0
+    :param batchsize1: Number of synthetic samples to generate for condition 1
+    :param alphaGAN: significance value to use for T-test of synthetic datasets.
+    :param minGE: Minimum difference in avg expr value to be considered significant
+    :param minfold: Minimum log2fold change to be considered significant 
+    """
+    
+    # Load Data
+    df = pd.read_csv(inputFile)
+
+    if numberC0<=0:
+        numberC0 = sum(df.iloc[0]==0)
+        
+    if numberC1<=0:
+        numberC1 = sum(df.iloc[0]==1)
+
+    if alphaGAN<=0:
+        alphaGAN = 1.25e-8/(len(df)-1)
+
+    # Train GAN on condition 0
+    temp_cond1, gene_symb, expr_train= formatdataforgen(df, 0, numberC0, seed) #condition, number of samples to train on
+    data2 = expr_train[(expr_train.T != 0).any()] # Drop any rows with all zeros
+    data = normalize(data2, kappa=2) # Normalize, Drop NAs and Drop Zero columns after normalization
+    todrop = data.columns[data.isnull().any()] # Find all columns with NA after normalization
+    test2 = data2.drop(list(todrop), axis=1) # Drop from pre-normalized dataset
+    ggan = gGAN(test2, gene_symb, latent_dim=LATENT_DIM, noise_rate=DEFAULT_NOISE_RATE)
+    ggan1 = ggan.train(epochs=epochs, file_name=None, batch_size=32)
+    condition0, genes_condition_0 = gensynthdata(ggan, batchsize0, test2, gene_symb, todrop) # Output batch size 
+
+    # Train GAN on condition 1
+    temp_cond1, gene_symb, expr_train= formatdataforgen(df, 1, numberC1, seed) #condition, number of samples to train on
+    data2 = expr_train[(expr_train.T != 0).any()] # Drop any rows with all zeros
+    data = normalize(data2, kappa=2) # Normalize, Drop NAs and Drop Zero columns after normalization
+    todrop = data.columns[data.isnull().any()] # Find all columns with NA after normalization
+    test2 = data2.drop(list(todrop), axis=1) # Drop from pre-normalized dataset
+    ggan = gGAN(test2, gene_symb, latent_dim=LATENT_DIM, noise_rate=DEFAULT_NOISE_RATE)
+    ggan1 = ggan.train(epochs=epochs, file_name=None, batch_size=32)
+    condition1, genes_condition_1 = gensynthdata(ggan, batchsize1, test2, gene_symb, todrop) # Output batch size 
+
+    #Perform signifiance testing
+    stored_Condition0 = formatforsigtestingbycondition(condition0, genes_condition_0, gene_symb)
+    stored_Condition1 = formatforsigtestingbycondition(condition1, genes_condition_1, gene_symb)
+    test_condition_1 = stored_Condition1.set_index(0)
+    test_condition_0 = stored_Condition0.set_index(0)
+    sorted_condition_1 = test_condition_1.sort_values(by=[0])
+    sorted_condition_0 = test_condition_0.sort_values(by=[0])
+    pvalues = performsigtesting(sorted_condition_0,sorted_condition_1)
+
+    #Get final Output
+    final_test_df_sig,final_test_df = Cleanupsiggenelist(inputFile, pvalues, sorted_condition_1, alphaGAN, minGE, minfold) #last term is the alpha
+
+    final_test_df_sig = final_test_df_sig.drop(['delta'], 1)
+    final_test_df_sig.insert(0,'gene',final_test_df_sig.index)
+    final_test_df_sig = final_test_df_sig[['gene','foldchange','pvalues']].sort_values(by=['gene'])
+    final_test_df_sig.rename(columns = {'foldchange':'log2FoldChange'}, inplace=True)
+    
+    return(final_test_df_sig)
+
+
+def main(argv):
+    mapParse = argp.ArgumentParser(description=('GAiN generates large synthetic cohorts using sparse training sets of gene expression data from samples of two different phenotypes.  It then performs differential expression (DE) analysis on the synthetic cohorts, returning a list of candidate DE genes.'))
+    mapParse.add_argument('-s','--samplenums', type=int, nargs=2, default=[-1, -1], metavar=('C0', 'C1'), help='Number of samples from each condition to use in training GAN (set to -1 to use all from a condition) [-1 -1]')
+    mapParse.add_argument('-b','--batchsizes', type=int, nargs=2, default=[1000, 1000], metavar=('C0', 'C1'), help='Size of synthetic cohort to generate for each condition [1000 1000]')
+    mapParse.add_argument('-e','--epochs', type=int, default=80, help='Number of epochs for training [80]')
+    mapParse.add_argument('-a','--alphaGAN', type=float, default=-1.0, metavar='ALPHA', help='Significance threshold for DE genes between synthetic cohorts [1.25e-8/(number of genes)]')
+    mapParse.add_argument('--minGE', type=float, metavar='GE', default=10, help='Minimum absolute difference in average expression between the conditions for a gene to be reported [10]')
+    mapParse.add_argument('--minLFC', type=float, metavar='LFC', default=1, help='Minimum log2 fold change in expression between the conditions for a gene to be reported [1]')
+    mapParse.add_argument('--seed', type=int, help='Optional random seed for sampling training cases')
+    mapParse.add_argument('-q', '--quiet', action='store_true', help="Limit program output")
+    mapParse.add_argument('-o','--outname', type=str, default='./GAiN', help='Prefix for output filenames [./GAiN]')
+    mapParse.add_argument('inputCSV', metavar='input.csv', help="Expression table in CSV format")
+    args = mapParse.parse_args()
+    
+    global quiet 
+    quiet = args.quiet
+    if quiet:
+        tf.get_logger().setLevel('ERROR')
+    else:
+        deprecation._PRINT_DEPRECATION_WARNINGS = True
+        
+
+    outDir = os.path.dirname(args.outname)
+    if not outDir:
+        outDir='.'
+
+    if not os.path.isdir(outDir):
+        print('Output folder {} does not exist, please create it before running {}'.format(outDir,os.path.basename(__file__)))
+        sys.exit(1)
+    
+    #See above parameters for arguments
+    generative_sig_df = runGAN(args.inputCSV, args.outname,
+                                              args.samplenums[0],
+                                              args.samplenums[1],
+                                              args.epochs,
+                                              args.batchsizes[0],
+                                              args.batchsizes[1],
+                                              args.alphaGAN,
+                                              args.minGE,
+                                              args.minLFC,
+                                              seed=args.seed)
+    #Write CSV with genelists
+    generative_sig_df.to_csv(args.outname+"_DE_genes.csv", index = False, header=True)
+
+    
+if __name__=="__main__":
+    main(sys.argv)

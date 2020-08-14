@@ -28,29 +28,29 @@ GAiN [-h] [-s C0 C1] [-b C0 C1] [-e EPOCHS] [-a ALPHA] [--minGE GE] [--minLFC LF
      [--seed SEED] [-q] [-o OUTNAME] input.csv
 ```
 ### Optional arguments
-- -h, --help
+- -h, --help  
      Prints the help menu, which contains an example of the function usage and abbreviated explanations of each of the options.
-- -s C0 C1, --samplenums C0 C1
+- -s C0 C1, --samplenums C0 C1  
      Number of samples from each condition to use in training GAN (set to -1 to use all from a condition (default: -1 -1)
-- -b C0 C1, --batchsizes C0 C1
+- -b C0 C1, --batchsizes C0 C1  
      Size of synthetic cohort to generate for each condition (default: 1000 1000)
-- -e EPOCHS, --epochs EPOCHS
+- -e EPOCHS, --epochs EPOCHS  
      Number of epochs for training model (default: 80)
-- -a ALPHA, --alphaGAN ALPHA
+- -a ALPHA, --alphaGAN ALPHA  
      Significance threshold for reporting genes as DE between the synthetic groups (default: 1.25e-8/(total number of genes tested)
 - --minGE GE  
      Minimum absolute difference in average expression between the synthetic groups for a gene to be reported as DE (default: 10)
-- --minLFC LFC
+- --minLFC LFC  
      Minimum log2 fold change in expression between the synthetic groups for a gene to be reported as DE (default: 1)
-- --seed SEED
+- --seed SEED  
      Optional seed for random sampling of the training sets
-- -q, --quiet
+- -q, --quiet  
      Run in quiet mode, limiting program output
-- -o OUTNAME, --outname OUTNAME
+- -o OUTNAME, --outname OUTNAME  
      Prefix for output filenames (default: ./GAiN)
 
 ### Input file
-- input.csv
+- input.csv  
      Path to a CSV table.  The first row must be any label string followed by the sample ids of the training set.  The second row must start with "Cancer ID" followed by 1 or 0 based on qhich phenotypic group of the sample for that column.  All subsequent rows must start with a gene label, followed by the expression level of that gene in the sample for that column.
 
 ### Output

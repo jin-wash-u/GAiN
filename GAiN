@@ -672,7 +672,7 @@ def runGAN(inputFile, outName, numberC0, numberC1, epochs, batchsize0, batchsize
     return(final_test_df_sig)
 
 
-def main(argv):
+def main():
     mapParse = argp.ArgumentParser(description=('GAiN generates large synthetic cohorts using sparse training sets of gene expression data from samples of two different phenotypes.  It then performs differential expression (DE) analysis on the synthetic cohorts, returning a list of candidate DE genes.'))
     mapParse.add_argument('-s','--samplenums', type=int, nargs=2, default=[-1, -1], metavar=('C0', 'C1'), help='Number of samples from each condition to use in training GAN (set to -1 to use all from a condition) [-1 -1]')
     mapParse.add_argument('-b','--batchsizes', type=int, nargs=2, default=[1000, 1000], metavar=('C0', 'C1'), help='Size of synthetic cohort to generate for each condition [1000 1000]')
@@ -718,4 +718,4 @@ def main(argv):
 
     
 if __name__=="__main__":
-    main(sys.argv)
+    main()

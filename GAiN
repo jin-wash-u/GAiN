@@ -451,8 +451,10 @@ def Cleanupsiggenelist (inputFile, pvalues, sorted_condition_1, alpha, minGE, mi
     final_test_df = pd.concat([ss, pv1], axis=1,ignore_index=True) #Join the gene names and the pvalues
     final_test_df = final_test_df.set_index(0)      # Make gene names the index
     #Filter by min gene expression of 10
-    #os.chdir("C:\\Users\\mrwwa\\OneDrive\\Documents")
     df00 = pd.read_csv(inputFile)
+    if df00.isnull().values.any():
+        df00 = df00.dropna()
+
     df00 = df00.T
     df00.columns = df00.iloc[0]
     df00.drop(df00.index[0])
@@ -518,8 +520,10 @@ def Getrealsiggenelist (inputFile, df, alpha, minGE, minfold) :
     final_test_df = final_test_df.set_index(0)      # Make gene names the index
     #Filter by min gene expression of 10
      #Filter by min gene expression difference of 10 and a mean fold change of >2
-    #os.chdir("C:\\Users\\mrwwa\\OneDrive\\Documents")
     df00 = pd.read_csv(inputFile)
+    if df00.isnull().values.any():
+        df00 = df00.dropna()
+
     df00 = df00.T
     df00.columns = df00.iloc[0]
     df00.drop(df00.index[0])
@@ -622,6 +626,9 @@ def runGAN(inputFile, outName, numberC0, numberC1, epochs, batchsize0, batchsize
     
     # Load Data
     df = pd.read_csv(inputFile)
+    if df.isnull().values.any():
+        print('WARNING: NaN expression values detected in input, removing automatically')
+        df = df.dropna()
 
     if numberC0<=0:
         numberC0 = sum(df.iloc[0]==0)

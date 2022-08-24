@@ -30,8 +30,7 @@ Running GAiN with the -h option (or --help) will print a desciption of its optio
 ```
 GAiN [-h] [-b C0 C1] [-e EPOCHS] [-a ALPHAGAN] [--minGE GE] [--minLFC LFC]
      [--numbOfNetworks NON] [--numNetworkCutoff NNC] [--deseq] [--save]
-     [--seed SEED] [-q] [--synth] [-o OUTNAME] input.csv population.csv
-     
+     [--synth] [--seed SEED] [-q] [-o OUTNAME] input.csv population.csv
 ```
 ### Optional arguments
 - -h, --help  
@@ -46,19 +45,19 @@ GAiN [-h] [-b C0 C1] [-e EPOCHS] [-a ALPHAGAN] [--minGE GE] [--minLFC LFC]
      Minimum absolute difference in average expression between the synthetic groups for a gene to be reported as DE (default: 10)
 - --minLFC LFC  
      Minimum log2 fold change in expression between the synthetic groups for a gene to be reported as DE (default: 1)
-- --numbOfNetworks NON
+- --numbOfNetworks NON  
      Number of networks to use for bagging (default: 20)
-- --numNetworkCutoff NNC
+- --numNetworkCutoff NNC  
      Number of networks gene must be significantly DE in (default: 20)
-- --deseq
+- --deseq  
      Use DESeq2 method for DE significance calculations (default: use edgeR)
-- --save
+- --save  
      Save trained models for later use
-- --synth
+- --synth  
      Save synthetic expression tables
-- --seed SEED  
+- --seed SEED    
      Optional seed for random sampling of the training sets
-- -q, --quiet 
+- -q, --quiet  
      Run in quiet mode, limiting program output
 - -o OUTNAME, --outname OUTNAME  
      Prefix for output filenames (default: ./GAiN)

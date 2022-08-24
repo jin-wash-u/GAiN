@@ -27,6 +27,9 @@ import os
 import subprocess as subp
 
 
+__version__ = "1.0"
+
+
 # Build the network
 warnings.filterwarnings('ignore', message='Discrepancy between')
 LATENT_DIM = 128
@@ -585,7 +588,7 @@ def getfinaloutputSepMultiGAN(inputFile, outName, genelist, final_test_df_sig_re
 def SepMultirunGAN(inputFileName, popFileName, outName, numberC0, numberC1, 
                    epochs, batchsize0, batchsize1, alphaGAN, minGE, minfold,
                    numbOfNetworks, numNetworkCutoff, useDESeq, saveTrained,
-                   seed=None):
+                   saveSynthExpr, seed=None):
     """
     SepMultirunGAN : Performs diff exp testing between GAN gene lists
     :param inputFileName: Name of CSV expression table with two phenotypes to train GAN
@@ -603,6 +606,7 @@ def SepMultirunGAN(inputFileName, popFileName, outName, numberC0, numberC1,
     :param numNetworkCutoff: Number of GANs a gene must be DE in to be reported
     :param useDESeq: Use DESeq method rather than edgeR to compute DE sig values
     :param saveTrained: Save trained GANs
+    :param saveSynthExpr: Save a synthetic expression table
     :param seed: Seed for RNG operations
     """
     df_combined = pd.DataFrame(columns=['pvalue', 'padj', 'lfc', 'delta'])
@@ -628,9 +632,6 @@ def SepMultirunGAN(inputFileName, popFileName, outName, numberC0, numberC1,
 
     if alphaGAN<=0:
         alphaGAN = 0.05 #1.25e-8/(len(df)-1)
-
-    if alphaReal<=0:
-        alphaReal = 0.05 #1.25e-8/(len(df)-1)
 
     # Format input data for training GAN
     expr_train0, todrop0 = formatdataforgen(df, 0, numberC0, seed) #condition, number of samples to train on
@@ -705,10 +706,14 @@ def SepMultirunGAN(inputFileName, popFileName, outName, numberC0, numberC1,
         #Perform significance testing
         sorted_condition_0 = formatforsigtestingbycondition(condition_0, genes_condition_0)
         sorted_condition_1 = formatforsigtestingbycondition(condition_1, genes_condition_1)
-        pvalues = performsigtesting(sorted_condition_0, sorted_condition_1, outName, useDESeq)
+        pvalues = performsigtesting(sorted_condition_0, sorted_condition_1, '{}_{}'.format(outName,i), useDESeq)
         final_df_temp = Cleanupsiggenelist(pvalues, alphaGAN, minGE, minfold)
 
-        df_combined = pd.concat([df_combined, final_df_temp])     
+        df_combined = pd.concat([df_combined, final_df_temp])  
+
+    if saveSynthExpr:
+        exprDf = pd.concat([sorted_condition_0.add_prefix('cond0_'), sorted_condition_1.add_prefix('cond1_')],axis=1)
+        exprDf.to_csv(outName+'_synthExpr.csv',index=True,header=True)
         
     dfCounts = pd.DataFrame(df_combined.index.value_counts(), columns=['count'])
     dfRank = pd.DataFrame(df_combined.groupby(level=0)['rank'].sum(), columns=['rank'])
@@ -729,19 +734,22 @@ def SepMultirunGAN(inputFileName, popFileName, outName, numberC0, numberC1,
     # conTrainDup = getfinaloutputSepMultiGAN(inputFile, outName+'_trainDup', trainDup_sig_genes.index, final_real_df_sig)
         
     return (gainResult)
+    
+    #TO DO: make rank first column, set cutoff = NON if > NON
 
 
 def main():
     mapParse = argp.ArgumentParser(description=('GAiN generates large synthetic cohorts using small training sets of gene expression data from samples of two different phenotypes (0 and 1).  It then performs differential expression (DE) analysis on the synthetic cohorts, returning a list of candidate DE genes.'))
+    parser.add_argument('--version', action='version', version='%(prog)s '+__version__)
     #mapParse.add_argument('-s','--samplenums', type=int, nargs=2, default=[-1, -1], metavar=('C0', 'C1'), help='Number of samples from each condition to use in training GAN (set to -1 to use all from a condition) [-1 -1]')
     mapParse.add_argument('-b','--batchsizes', type=int, nargs=2, default=[500, 500], metavar=('C0', 'C1'), help='Size of synthetic cohort to generate for each condition [500 500]')
-    mapParse.add_argument('-e','--epochs', type=int, default=500, help='Number of epochs for training [500]')
+    mapParse.add_argument('-e','--epochs', type=int, default=100, help='Number of epochs for training [100]')
     mapParse.add_argument('-a','--alphaGAN', type=float, default=-1.0, metavar='ALPHAGAN', help='Adjusted significance threshold for DE genes between synthetic cohorts [.05]')
     #mapParse.add_argument('--alphaReal', type=float, default=-1.0, metavar='ALPHAREAL', help='Adjusted significance threshold for DE genes between real cohorts [.05]')
     mapParse.add_argument('--minGE', type=float, metavar='GE', default=10, help='Minimum absolute difference in average expression between the conditions for a gene to be reported [10]')
     mapParse.add_argument('--minLFC', type=float, metavar='LFC', default=1, help='Minimum log2 fold change in expression between the conditions for a gene to be reported [1]')
-    mapParse.add_argument('--numbOfNetworks', type=int, metavar='NON', default=20, help='Number of networks to use for bagging [20]')
-    mapParse.add_argument('--numNetworkCutoff', type=int, metavar='NNC', default=20, help='Number of networks gene must be significantly DE in [20]')
+    mapParse.add_argument('--numbOfNetworks', type=int, metavar='NON', default=10, help='Number of networks to use for bagging [10]')
+    mapParse.add_argument('--numNetworkCutoff', type=int, metavar='NNC', default=-1, help='Number of networks gene must be sig. DE in [NON]')
     mapParse.add_argument('--deseq', action='store_true', help="Use DESeq2 method for DE significance calculations (edgeR is default)")
     mapParse.add_argument('--save', action='store_true', help="Saved trained models for later use")
     mapParse.add_argument('--synth', action='store_true', help="Save synthetic expression tables")
@@ -759,6 +767,8 @@ def main():
     else:
         deprecation._PRINT_DEPRECATION_WARNINGS = True
         
+    if (args.numNetworkCutoff > args.numbOfNetworks) or (args.numNetworkCutoff < 0):
+        args.numNetworkCutoff = args.numbOfNetworks
 
     outDir = os.path.dirname(args.outname)
     if not outDir:
@@ -784,6 +794,7 @@ def main():
                                args.numNetworkCutoff,
                                args.deseq,
                                args.save,
+                               args.synth,
                                seed=args.seed)
     #Write CSV with genelist
     counts_df.to_csv(args.outname+"_DE_genes.csv", index = True, header=False)

@@ -16,7 +16,7 @@ Please make sure you have installed the following tools:
 Clone this repository to the desired location:
 
 ```
-git clone https://github.com/mjinkm/GAiN.git
+git clone https://github.com/jin-wash-u/GAiN.git
 ```
 
 ## Test installation
@@ -28,13 +28,16 @@ $PATH_TO_GAIN/GAiN -h
 ## Parameters
 Running GAiN with the -h option (or --help) will print a desciption of its optional and required input arguments. A description of each follows.
 ```
-GAiN [-h] [-b C0 C1] [-e EPOCHS] [-a ALPHAGAN] [--minGE GE] [--minLFC LFC]
-     [--numbOfNetworks NON] [--numNetworkCutoff NNC] [--deseq] [--save]
-     [--synth] [--seed SEED] [-q] [-o OUTNAME] input.csv population.csv
+GAiN [-h] [--version] [-b C0 C1] [-e EPOCHS] [-a ALPHAGAN] [--minGE GE]
+     [--minLFC LFC] [--numbOfNetworks NON] [--numNetworkCutoff NNC]
+     [--deseq] [--save] [--synth] [--seed SEED] [-q] [-o OUTNAME]
+     input.csv population.csv
 ```
 ### Optional arguments
 - -h, --help  
      Prints the help menu, which contains an example of the function usage and abbreviated explanations of each of the options.
+- --version  
+     Prints version information
 - -b C0 C1, --batchsizes C0 C1  
      Size of synthetic cohort to generate for each condition (default: 500 500)
 - -e EPOCHS, --epochs EPOCHS  
@@ -84,7 +87,7 @@ GAiN \
 ```
 The results of this execution can be compared with the results file example/example_result_DE_genes.csv.
 
-The gene expression values in example_input.csv sourced from GSE22260 consisting of TMM-nnormalized expression of 19 prostate tumor (condition 0) and 10 adjacent normal (condition 1) samples.  The population cohort is TMM normalized expression of all samples in TCGA-PRAD.
+The gene expression values in example_input.csv consist of TMM-normalized counts from 10 primary tumors of luminal B subtype (condition 0) and 10 primary tumors of triple negative subtype (condition 1) sourced from TCGA-BRCA.  The population cohort is TMM normalized expression of all primary tumors in TCGA-BRCA.
 
 ## GAiN Docker Instructions
 A docker image for GAiN has been created and tested on Linux and Mac. To run GAiN using this method, you need to have [Docker](https://docs.docker.com/) installed on your machine. 

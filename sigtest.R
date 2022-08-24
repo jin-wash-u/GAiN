@@ -65,7 +65,7 @@ if(useDESeq == '1')
   allCounts = counts(des.ds, normalized = F)
   absDiff = abs(rowSums(allCounts[,group==0])/sum(group==0) - 
                 rowSums(allCounts[,group==1])/sum(group==1))
-  deRank = order(des.results$padj)
+  deRank = rank(des.results$padj)
   write.table(cbind(des.results, absDiff, deRank), file = paste0(fname,'_tmp_pval.csv'), sep=',', 
               row.names = T, col.names = NA, quote=F)
   
@@ -148,7 +148,7 @@ if(useDESeq == '1')
   allCounts = de$counts
   absDiff = abs(rowSums(allCounts[,group==0])/sum(group==0) - 
                 rowSums(allCounts[,group==1])/sum(group==1))
-  deRank = order(res$FDR)
+  deRank = rank(res$FDR)
   write.table(cbind(res, absDiff, deRank), file = paste0(fname,'_tmp_pval.csv'), sep=',', row.names = F, quote=F)
   
   if(type(readCounts) != 'logical')

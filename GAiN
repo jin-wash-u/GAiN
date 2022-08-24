@@ -740,7 +740,7 @@ def SepMultirunGAN(inputFileName, popFileName, outName, numberC0, numberC1,
 
 def main():
     mapParse = argp.ArgumentParser(description=('GAiN generates large synthetic cohorts using small training sets of gene expression data from samples of two different phenotypes (0 and 1).  It then performs differential expression (DE) analysis on the synthetic cohorts, returning a list of candidate DE genes.'))
-    parser.add_argument('--version', action='version', version='%(prog)s '+__version__)
+    mapParse.add_argument('--version', action='version', version='%(prog)s '+__version__)
     #mapParse.add_argument('-s','--samplenums', type=int, nargs=2, default=[-1, -1], metavar=('C0', 'C1'), help='Number of samples from each condition to use in training GAN (set to -1 to use all from a condition) [-1 -1]')
     mapParse.add_argument('-b','--batchsizes', type=int, nargs=2, default=[500, 500], metavar=('C0', 'C1'), help='Size of synthetic cohort to generate for each condition [500 500]')
     mapParse.add_argument('-e','--epochs', type=int, default=100, help='Number of epochs for training [100]')

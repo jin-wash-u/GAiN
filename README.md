@@ -68,7 +68,7 @@ GAiN [-h] [--version] [-b C0 C1] [-e EPOCHS] [-a ALPHAGAN] [--minGE GE]
 ### Input files
 - input.csv  
      Path to the training cohort gene expression table in CSV format.  A pair of large synthetic cohorts will be generated based on the samples in this table.  The first row must be any label string followed by the sample ids of the training set.  The second row must start with a label string (e.g. "Cancer ID") followed by 0 or 1 based on the phenotypic group of the sample for that column.  All subsequent rows must start with a gene label, followed by the expression level of that gene in the sample for that column.
-- population.csv
+- population.csv  
      Path to the population cohort gene expression table in CSV format.  Scale will be restored to the synthetic gene expression tables using these samples.  Follows the same format as input.csv, but without any phenotype group/Cancer ID row.  Note that only genes with entries in both tables will be modeled.
 
 ### Output
@@ -80,8 +80,8 @@ An example input expression CSV file is included with GAiN to demonstrate how to
 ```
 cd $PATH_TO_DANSR
 GAiN \
-        -e 50 \
         -o test \
+	--seed 42 \
 	example/example_input.csv \
 	example/example_population.csv
 ```
@@ -112,8 +112,8 @@ docker run mjinkm/gain GAiN -h
 To run GAiN using docker on the example provided, use the following command:
 ```
 docker run -v $PATH_TO_OUTPUT:/gain_out mjinkm/gain GAiN \
-        -e 50 \
         -o /gain_out/test \
+	--seed 42 \
 	/opt/GAiN/example/example_input.csv \
 	/opt/GAiN/example/example_population.csv
 ```

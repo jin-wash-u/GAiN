@@ -1,5 +1,5 @@
 # GAiN
-GAiN generates large synthetic cohorts using sparse training sets of gene expression data from samples of two different phenotypes. It then performs differential expression (DE) analysis on the synthetic cohorts, returning a list of candidate DE genes.
+GAiN generates large synthetic cohorts using small training sets of gene expression data from samples of two different phenotypes. It then performs differential expression (DE) analysis on the synthetic cohorts, returning a list of candidate DE genes.
    
 ## Prerequisites
 Please make sure you have installed the following tools:
@@ -7,6 +7,10 @@ Please make sure you have installed the following tools:
   - [pandas](https://pandas.pydata.org/)
   - [tensorflow](https://www.tensorflow.org/)
   - [keras](https://keras.io/)
+  - [sklearn](https://scikit-learn.org/)
+- [R](https://www.r-project.org/)
+  - [edgeR](https://bioconductor.org/packages/release/bioc/html/edgeR.html)
+  - [DESeq2](https://bioconductor.org/packages/release/bioc/html/DESeq2.html)
 
 ## Installation
 Clone this repository to the desired location:
@@ -22,39 +26,51 @@ $PATH_TO_GAIN/GAiN -h
 ```
 
 ## Parameters
-Running HPV-EM with the -h option (or --help) will print a desciption of its optional and required input arguments. A description of each follows.
+Running GAiN with the -h option (or --help) will print a desciption of its optional and required input arguments. A description of each follows.
 ```
-GAiN [-h] [-s C0 C1] [-b C0 C1] [-e EPOCHS] [-a ALPHA] [--minGE GE] [--minLFC LFC]
-     [--seed SEED] [-q] [-o OUTNAME] input.csv
+GAiN [-h] [-b C0 C1] [-e EPOCHS] [-a ALPHAGAN] [--minGE GE] [--minLFC LFC]
+     [--numbOfNetworks NON] [--numNetworkCutoff NNC] [--deseq] [--save]
+     [--seed SEED] [-q] [--synth] [-o OUTNAME] input.csv population.csv
+     
 ```
 ### Optional arguments
 - -h, --help  
      Prints the help menu, which contains an example of the function usage and abbreviated explanations of each of the options.
-- -s C0 C1, --samplenums C0 C1  
-     Number of samples from each condition to use in training GAN (set to -1 to use all from a condition (default: -1 -1)
 - -b C0 C1, --batchsizes C0 C1  
-     Size of synthetic cohort to generate for each condition (default: 1000 1000)
+     Size of synthetic cohort to generate for each condition (default: 500 500)
 - -e EPOCHS, --epochs EPOCHS  
-     Number of epochs for training model (default: 80)
+     Number of epochs for training model (default: 500)
 - -a ALPHA, --alphaGAN ALPHA  
-     Significance threshold for reporting genes as DE between the synthetic groups (default: 1.25e-8/(total number of genes tested)
+     Significance threshold for reporting genes as DE between the synthetic groups (default: 0.05)
 - --minGE GE  
      Minimum absolute difference in average expression between the synthetic groups for a gene to be reported as DE (default: 10)
 - --minLFC LFC  
      Minimum log2 fold change in expression between the synthetic groups for a gene to be reported as DE (default: 1)
+- --numbOfNetworks NON
+     Number of networks to use for bagging (default: 20)
+- --numNetworkCutoff NNC
+     Number of networks gene must be significantly DE in (default: 20)
+- --deseq
+     Use DESeq2 method for DE significance calculations (default: use edgeR)
+- --save
+     Save trained models for later use
+- --synth
+     Save synthetic expression tables
 - --seed SEED  
      Optional seed for random sampling of the training sets
-- -q, --quiet  
+- -q, --quiet 
      Run in quiet mode, limiting program output
 - -o OUTNAME, --outname OUTNAME  
      Prefix for output filenames (default: ./GAiN)
 
-### Input file
+### Input files
 - input.csv  
-     Path to a CSV table.  The first row must be any label string followed by the sample ids of the training set.  The second row must start with "Cancer ID" followed by 1 or 0 based on qhich phenotypic group of the sample for that column.  All subsequent rows must start with a gene label, followed by the expression level of that gene in the sample for that column.
+     Path to the training cohort gene expression table in CSV format.  A pair of large synthetic cohorts will be generated based on the samples in this table.  The first row must be any label string followed by the sample ids of the training set.  The second row must start with a label string (e.g. "Cancer ID") followed by 0 or 1 based on the phenotypic group of the sample for that column.  All subsequent rows must start with a gene label, followed by the expression level of that gene in the sample for that column.
+- population.csv
+     Path to the population cohort gene expression table in CSV format.  Scale will be restored to the synthetic gene expression tables using these samples.  Follows the same format as input.csv, but without any phenotype group/Cancer ID row.  Note that only genes with entries in both tables will be modeled.
 
 ### Output
-GAiN generates a CSV table, by default GAiN_DE_genes.csv, containing the list of differentially expressed genes between the two synthetic groups that passed the significance, absolute difference and LFC filters, along with the log2 fold change and nominal p-value for each.
+GAiN generates a CSV table, by default GAiN_DE_genes.csv, containing the list of differentially expressed genes between the two synthetic groups that passed all filters, together with the sum of each gene's rank across the NON networks and the number of networks in which it was significantly DE.
  
 ### Example
 An example input expression CSV file is included with GAiN to demonstrate how to run the tool. It can be run as follows:
@@ -62,13 +78,14 @@ An example input expression CSV file is included with GAiN to demonstrate how to
 ```
 cd $PATH_TO_DANSR
 GAiN \
-        -s 10 10 \
+        -e 50 \
         -o test \
-	example/example_input.csv
+	example/example_input.csv \
+	example/example_population.csv
 ```
 The results of this execution can be compared with the results file example/example_result_DE_genes.csv.
 
-The gene expression values in example_input.csv sourced from GSE22260 consisting of 19 prostate tumor (condition 0) and 10 adjacent normal (condition 1) samples.
+The gene expression values in example_input.csv sourced from GSE22260 consisting of TMM-nnormalized expression of 19 prostate tumor (condition 0) and 10 adjacent normal (condition 1) samples.  The population cohort is TMM normalized expression of all samples in TCGA-PRAD.
 
 ## GAiN Docker Instructions
 A docker image for GAiN has been created and tested on Linux and Mac. To run GAiN using this method, you need to have [Docker](https://docs.docker.com/) installed on your machine. 
@@ -93,8 +110,9 @@ docker run mjinkm/gain GAiN -h
 To run GAiN using docker on the example provided, use the following command:
 ```
 docker run -v $PATH_TO_OUTPUT:/gain_out mjinkm/gain GAiN \
-        -s 10 10 \
+        -e 50 \
         -o /gain_out/test \
-	/opt/GAiN/example/example_input.csv
+	/opt/GAiN/example/example_input.csv \
+	/opt/GAiN/example/example_population.csv
 ```
 where `PATH_TO_OUTPUT` is the desired local output directory.

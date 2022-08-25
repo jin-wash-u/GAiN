@@ -41,17 +41,17 @@ GAiN [-h] [--version] [-b C0 C1] [-e EPOCHS] [-a ALPHAGAN] [--minGE GE]
 - -b C0 C1, --batchsizes C0 C1  
      Size of synthetic cohort to generate for each condition (default: 500 500)
 - -e EPOCHS, --epochs EPOCHS  
-     Number of epochs for training model (default: 500)
+     Number of epochs for training model (default: 100)
 - -a ALPHA, --alphaGAN ALPHA  
      Significance threshold for reporting genes as DE between the synthetic groups (default: 0.05)
 - --minGE GE  
-     Minimum absolute difference in average expression between the synthetic groups for a gene to be reported as DE (default: 10)
+     Minimum absolute difference in average expression between the synthetic groups for a gene to be reported as DE (default: 0)
 - --minLFC LFC  
-     Minimum log2 fold change in expression between the synthetic groups for a gene to be reported as DE (default: 1)
+     Minimum log2 fold change in expression between the synthetic groups for a gene to be reported as DE (default: 0)
 - --numbOfNetworks NON  
-     Number of networks to use for bagging (default: 20)
+     Number of networks to use for bagging (default: 10)
 - --numNetworkCutoff NNC  
-     Number of networks gene must be significantly DE in (default: 20)
+     Number of networks gene must be significantly DE in (default: NON)
 - --deseq  
      Use DESeq2 method for DE significance calculations (default: use edgeR)
 - --save  

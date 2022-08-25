@@ -49,7 +49,7 @@ group=c(rep('0',ncol(testCond0)), rep('1',ncol(testCond1)))
 
 if(useDESeq == '1')
 {
-  print('Using DESeq2')
+  #print('Using DESeq2')
   #DE for synthetic samples
   tmp = testInput
   tmp[] = lapply(tmp, as.integer)
@@ -135,7 +135,7 @@ if(useDESeq == '1')
   
 } else
 {
-  print('Using edgeR')
+  #print('Using edgeR')
   de = DGEList(counts=testInput, genes=rownames(testInput), group=group)
   de = calcNormFactors(de)
   design <- model.matrix(~group)

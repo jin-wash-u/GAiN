@@ -746,8 +746,8 @@ def main():
     mapParse.add_argument('-e','--epochs', type=int, default=100, help='Number of epochs for training [100]')
     mapParse.add_argument('-a','--alphaGAN', type=float, default=-1.0, metavar='ALPHAGAN', help='Adjusted significance threshold for DE genes between synthetic cohorts [.05]')
     #mapParse.add_argument('--alphaReal', type=float, default=-1.0, metavar='ALPHAREAL', help='Adjusted significance threshold for DE genes between real cohorts [.05]')
-    mapParse.add_argument('--minGE', type=float, metavar='GE', default=10, help='Minimum absolute difference in average expression between the conditions for a gene to be reported [10]')
-    mapParse.add_argument('--minLFC', type=float, metavar='LFC', default=1, help='Minimum log2 fold change in expression between the conditions for a gene to be reported [1]')
+    mapParse.add_argument('--minGE', type=float, metavar='GE', default=0, help='Minimum absolute difference in average expression between the conditions for a gene to be reported [0]')
+    mapParse.add_argument('--minLFC', type=float, metavar='LFC', default=0, help='Minimum log2 fold change in expression between the conditions for a gene to be reported [0]')
     mapParse.add_argument('--numbOfNetworks', type=int, metavar='NON', default=10, help='Number of networks to use for bagging [10]')
     mapParse.add_argument('--numNetworkCutoff', type=int, metavar='NNC', default=-1, help='Number of networks gene must be sig. DE in [NON]')
     mapParse.add_argument('--deseq', action='store_true', help="Use DESeq2 method for DE significance calculations (edgeR is default)")
@@ -763,7 +763,8 @@ def main():
     global quiet 
     quiet = args.quiet
     if quiet:
-        tf.get_logger().setLevel('ERROR')
+        #tf.get_logger().setLevel('ERROR')
+        tf.logging.set_verbosity(tf.logging.ERROR)
     else:
         deprecation._PRINT_DEPRECATION_WARNINGS = True
         
@@ -798,7 +799,7 @@ def main():
                                seed=args.seed)
     #Write CSV with genelist
     counts_df = counts_df.rename_axis('Gene')
-    dft.columns = ['AvgRank','NumNetworks']
+    counts_df.columns = ['AvgRank','NumNetworks']
     counts_df.to_csv(args.outname+"_DE_genes.csv", index = True, header = True)
     # final_test_df_sig_real.to_csv(args.outname+"_DE_real.csv", index = True, header=True)
 

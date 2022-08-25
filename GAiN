@@ -7,8 +7,11 @@ from scipy import sparse
 from sklearn.model_selection import train_test_split
 from sklearn.datasets import make_classification
 from sklearn.ensemble import RandomForestClassifier
-from tensorflow.python.util import deprecation
-deprecation._PRINT_DEPRECATION_WARNINGS = False
+#from tensorflow.python.util import deprecation
+#deprecation._PRINT_DEPRECATION_WARNINGS = False
+
+import warnings
+warnings.filterwarnings('ignore',category=UserWarning)
 
 import keras 
 from tensorflow.keras.optimizers import RMSprop
@@ -20,7 +23,14 @@ from keras.callbacks import TensorBoard
 import tensorflow.compat.v1 as tf
 tf.disable_v2_behavior()
 
-import warnings
+
+#import tensorflow.python.util.deprecation as deprecation
+#deprecation._PRINT_DEPRECATION_WARNINGS = False
+#try:
+#    from tensorflow.python.util import module_wrapper as deprecation
+#except ImportError:
+#    from tensorflow.python.util import deprecation_wrapper as deprecation
+#deprecation._PER_MODULE_WARNING_LIMIT = 0
 import argparse as argp
 import sys
 import os

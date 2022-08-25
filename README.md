@@ -79,6 +79,7 @@ An example input expression CSV file is included with GAiN to demonstrate how to
 
 ```
 cd $PATH_TO_DANSR
+gunzip example/example_population.csv.gz
 GAiN \
         -o test \
 	--seed 42 \

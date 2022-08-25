@@ -716,8 +716,8 @@ def SepMultirunGAN(inputFileName, popFileName, outName, numberC0, numberC1,
         exprDf.to_csv(outName+'_synthExpr.csv',index=True,header=True)
         
     dfCounts = pd.DataFrame(df_combined.index.value_counts(), columns=['count'])
-    dfRank = pd.DataFrame(df_combined.groupby(level=0)['rank'].sum(), columns=['rank'])
-    gainResult = pd.merge(dfCounts, dfRank, left_index=True, right_index=True)
+    dfRank = pd.DataFrame(df_combined.groupby(level=0)['rank'].mean(), columns=['rank'])
+    gainResult = pd.merge(dfRank, dfCounts, left_index=True, right_index=True)
     gainResult = gainResult[gainResult['count']>= numNetworkCutoff]
     # genelist = gainResult.index
     
@@ -797,7 +797,9 @@ def main():
                                args.synth,
                                seed=args.seed)
     #Write CSV with genelist
-    counts_df.to_csv(args.outname+"_DE_genes.csv", index = True, header=False)
+    counts_df = counts_df.rename_axis('Gene')
+    dft.columns = ['AvgRank','NumNetworks']
+    counts_df.to_csv(args.outname+"_DE_genes.csv", index = True, header = True)
     # final_test_df_sig_real.to_csv(args.outname+"_DE_real.csv", index = True, header=True)
 
     

@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 
+import os
+os.environ['OPENBLAS_NUM_THREADS'] = '1'
 import numpy as np
 import pandas as pd
 from scipy import stats
 from scipy import sparse
+from scipy.special import expit, logit
 from sklearn.model_selection import train_test_split
 from sklearn.datasets import make_classification
 from sklearn.ensemble import RandomForestClassifier
-#from tensorflow.python.util import deprecation
-#deprecation._PRINT_DEPRECATION_WARNINGS = False
-
-import warnings
-warnings.filterwarnings('ignore',category=UserWarning)
+from tensorflow.python.util import deprecation
+deprecation._PRINT_DEPRECATION_WARNINGS = False
 
 import keras 
 from tensorflow.keras.optimizers import RMSprop
@@ -23,30 +23,20 @@ from keras.callbacks import TensorBoard
 import tensorflow.compat.v1 as tf
 tf.disable_v2_behavior()
 
-
-#import tensorflow.python.util.deprecation as deprecation
-#deprecation._PRINT_DEPRECATION_WARNINGS = False
-#try:
-#    from tensorflow.python.util import module_wrapper as deprecation
-#except ImportError:
-#    from tensorflow.python.util import deprecation_wrapper as deprecation
-#deprecation._PER_MODULE_WARNING_LIMIT = 0
+import warnings
 import argparse as argp
 import sys
-import os
 import subprocess as subp
-
-
-__version__ = "1.0"
-
 
 # Build the network
 warnings.filterwarnings('ignore', message='Discrepancy between')
 LATENT_DIM = 128
 DEFAULT_NOISE_RATE = 0.035
-#CHECKPOINTS_DIR = '../checkpoints'   #this is where to edit
 quiet = False
-keepTmp = False 
+keepTmp = False #TO DO: set to false
+
+__version__ = "1.0"
+
 
 class confusionMat:
     def __init__(self,TPR,TNR,PPV,NPV,FPR,FNR,FDR,ACC):
@@ -121,7 +111,7 @@ class gGAN:
         # Following parameter and optimizer set as recommended in paper
         self.n_critic = 5
         self.clip_value = 0.01
-        optimizer = RMSprop(learning_rate=0.00005)
+        optimizer = RMSprop(lr=0.00005)
 
         # Build and compile the discriminator
         self.discriminator = self._build_discriminator()
@@ -242,7 +232,6 @@ class gGAN:
         :param file_name: Name of the .h5 file in checkpoints. If None, the model won't be saved
         :param batch_size: Batch size
         """
-        
         # Best score for correlation of distance gene matrices
         best_gdxdz = 0
 
@@ -289,7 +278,7 @@ class gGAN:
             if not quiet:
                 print('{} [D loss: {:.4f}] [G loss: {:.4f}]'.format(epoch, d_loss, g_loss))
         
-        # if file_name: #MJI update
+        # if file_name:
         #     self.save_model(file_name)
 
 
@@ -352,7 +341,7 @@ class gGAN:
 
 def normalize(expr, kappa=1):
     """
-    z-normalizes expressions to make each gene have mean 0 and std kappa^-1
+    Normalizes expressions to make each gene have mean 0 and std kappa^-1
     :param expr: matrix of gene expressions. Shape=(nb_samples, nb_genes)
     :param kappa: kappa^-1 is the gene std
     :return: normalized expressions
@@ -422,14 +411,7 @@ def nb_sig_test():
     return expr * std + mean
 
 
-def formatdataforgen(df, condition, num_samples_to_build_on, seed=None):
-    """
-    Formats input expression data for training GANs
-    :param df: gene expr dataframe, each column is a sample, first row has value 0 or 1 defining sample phenotype, all other rows are expression values for individual genes (index/row name should be gene name)
-    :param condition: which phenotype (0 or 1) to extract and format
-    :param num_samples_to_build_on: number of samples to extract from given phenotype
-    :param seed: seed for reproducible sampling    
-    """
+def formatdataforgen(df, condition, num_samples_to_build_on, isLogNorm, seed=None):
     # df = df.set_index(df.columns[0]) Now done in SepMultirunGAN when merging duplicate gene names
     # Further formating after subsetting class
     df = df.loc[:, df.iloc[0] == condition]   # Select only one class to condition GAN 
@@ -441,7 +423,10 @@ def formatdataforgen(df, condition, num_samples_to_build_on, seed=None):
     expr_train.loc[:,(expr_train != 0).any()] # Drop any samples with all zeros
     expr_train = expr_train.T
     #import pdb; pdb.set_trace()
-    data = normalize(expr_train, kappa=2)
+    if not isLogNorm:
+        data = normalize(expr_train, kappa=2)
+    else:
+        data = expr_train
     todrop = list(data.columns[data.isnull().any()]) #Drop NAs
     # expr_train = expr_train.drop(list(todrop), axis=1)
     if not quiet:
@@ -450,27 +435,24 @@ def formatdataforgen(df, condition, num_samples_to_build_on, seed=None):
     return (expr_train, todrop)
 
 
-def gensynthdata (ggan, sizeofset, popMean, popStd):
-    """
-    Generate synthetic expression data from trained GAN
-    :param ggan: trained GAN for a phenotype
-    :param sizeofset: number of synthetic samples to generate
-    :param popMean: population cohort mean of gene expression values for restoring scale
-    :param popStd: population cohort standard dev of gene expression values for restoring scale
-    """
+def gensynthdata (ggan, sizeofset, popMean, popStd, geneNames, isLogNorm):
+    # Generate synthetic data
     size = sizeofset # Choose the size of the synthetic dataset
     #mean = np.mean(populationData, axis=0)
     #std = np.std(populationData, axis=0)
     #r_min = populationData.min()
     #r_max = populationData.max()
     expr = ggan.generate_batch(size)
-    expr = normalize(expr)
-    mean_array = popMean.values
-    std_array = popStd.values
-    expr = expr * std_array + mean_array 
-    synth_expression = clip_outliers(expr, gene_means=None, gene_stds=None, std_clip=2)
+    if not isLogNorm:
+        expr = normalize(expr) #TO DO: ask Mike about this
+        mean_array = popMean.values
+        std_array = popStd.values
+        expr = expr * std_array + mean_array 
+        synth_expression = clip_outliers(expr, gene_means=None, gene_stds=None, std_clip=2)
+    else:
+        synth_expression = expr
     condition_N = synth_expression.T
-    genes_condition_N = list(popMean.index)
+    genes_condition_N = list(geneNames)
     return (condition_N, genes_condition_N)
 
 
@@ -481,25 +463,29 @@ def formatforsigtestingbycondition(condition_n, genes_condition_n) :
     return(expression_n)
 
 
-def performsigtesting(sorted_condition_0, sorted_condition_1, outname, useDESeq):
-    """
-    Perform DEG analysis to find significantly DE genes between phenotypes
-    :param sorted_condition_0: synthetic expression table for phenotype 0
-    :param sorted_condition_1: synthetic expression table for phenotype 1
-    :param outname: output filename prefix
-    :param useDESeq: use DESeq2 for DEG analysis rather than edgeR
-    """
+# Perform significance testing
+def performsigtesting(sorted_condition_0, sorted_condition_1, outname, useDESeq, geneMins, geneScale, isLogNorm):
+    if isLogNorm:
+        #Restore scale by reversing logistic sigmoid and log2 steps:
+        #sorted_condition_0 = sorted_condition_0.applymap(lambda x: logit(x))
+        sorted_condition_0 = sorted_condition_0.mul(geneScale, axis='rows')
+        sorted_condition_0 = sorted_condition_0.add(geneMins, axis='rows')
+        sorted_condition_0 = sorted_condition_0.rpow(2)
+        #sorted_condition_1 = sorted_condition_1.applymap(lambda x: logit(x))
+        sorted_condition_1 = sorted_condition_1.mul(geneScale, axis='rows')
+        sorted_condition_1 = sorted_condition_1.add(geneMins, axis='rows')
+        sorted_condition_1 = sorted_condition_1.rpow(2)
     sorted_condition_0.to_csv(outname+"_tmp_cond0.csv", index = True, header=True)
     sorted_condition_1.to_csv(outname+"_tmp_cond1.csv", index = True, header=True)
+
     rscript = os.path.dirname(os.path.abspath(__file__))+'/sigtest.R'
     if useDESeq:
         DESeq = '1'
     else:
         DESeq = '0'
- 
-    args = ['Rscript',rscript,outname+'_tmp_cond0.csv',outname+'_tmp_cond1.csv', '0', outname, DESeq]
+    args = ['Rscript', rscript, outname+'_tmp_cond0.csv', outname+'_tmp_cond1.csv', '0', outname, DESeq]
     subp.check_call(args, stdout=sys.stdout)
-
+    
     pvalues = pd.read_csv(outname+"_tmp_pval.csv")
     pvalues = pvalues.set_index(pvalues.columns[0])
     if useDESeq:
@@ -518,13 +504,6 @@ def performsigtesting(sorted_condition_0, sorted_condition_1, outname, useDESeq)
 
 
 def Cleanupsiggenelist(pvalues, alpha, minGE, minfold):
-    """
-    Filter DE gene list
-    :param pvalues: dataframe of DEG analysis results
-    :param alpha: adjusted p-value significance threshold
-    :param minGE: minimum absolute difference in average expression between the conditions for a gene to be reported
-    :param minfold: minimum log2 fold change in expression between the conditions for a gene to be reported
-    """
     final_df_sig = pvalues[(abs(pvalues['delta'])> minGE) & #filter by delta
                            (abs(pvalues['lfc']) > minfold) & #filter by LFC
                            (pvalues['padj'] < alpha)]
@@ -538,9 +517,11 @@ def Getrealsiggenelist(pReal, alpha, minGE, minfold):
     return(final_real_df_sig)
 
 
-def getfinaloutputSepMultiGAN(inputFile, outName, genelist, final_test_df_sig_real):
+def getfinaloutput(outName, final_df_sig, final_test_df_sig_real, final_test_df):
     #Compare sig gene lists from real and generated data
-    generative_sig_list = genelist
+    final_test_df = final_test_df
+    final_test_df_sig = final_df_sig
+    generative_sig_list = final_test_df_sig['gene']
     real_sig_list = final_test_df_sig_real.index
     def intersection(lst1, lst2): 
         lst3 = [value for value in lst1 if value in lst2] 
@@ -557,7 +538,7 @@ def getfinaloutputSepMultiGAN(inputFile, outName, genelist, final_test_df_sig_re
     TP = overlap 
     FP = synth_alone 
     FN = real_alone 
-    total_genes = total_genes = inputFile.shape[0]
+    total_genes = final_test_df.shape[0]
     TN = total_genes - synth 
 
     # Sensitivity, hit rate, recall, or true positive rate
@@ -577,6 +558,58 @@ def getfinaloutputSepMultiGAN(inputFile, outName, genelist, final_test_df_sig_re
     # Overall accuracy
     ACC = np.float64(TP+TN)/(TP+FP+FN+TN)
 
+    print('TP={}\nTN={}\nFP={}\nFN={}'.format(TP,TN,FP,FN))
+    print('Sensitivity=',TPR)
+    print('Specificity=',TNR)
+    print('PPV=',PPV)
+    print('NPV=',NPV)
+    print('False Positive Rate=',FPR)
+    print('False Negative Rate=',FNR)
+    print('False Discovery Rate=',FDR)
+    print('Overall Accuracy=',ACC)
+    # Generate Accuracy Measurements and graphical output
+    # venn2(subsets = (synth_alone, real_alone, overlap), set_labels = ('Synthetic', 'Real'), set_colors=('red', 'skyblue'))
+    # plt.title('Venn')
+    # plt.savefig(outName+'_venn.pdf')
+    return(TPR,TNR,PPV,NPV,FPR,FNR,FDR,ACC)
+    
+
+def getfinaloutputSepMultiGAN(outName, generative_sig_list, real_sig_list, totNumGenes):
+    #Compare sig gene lists from real and generated data
+    genSet = set(generative_sig_list)
+    realSet = set(real_sig_list)
+
+    # Get Raw Output
+    overlap = len(genSet & realSet)
+    synth = len(genSet)
+    real = len(realSet)
+    synth_alone = len(genSet - realSet)
+    real_alone = len(realSet - genSet)
+
+    TP = overlap 
+    FP = synth_alone 
+    FN = real_alone 
+    total_genes = totNumGenes
+    TN = total_genes - synth 
+
+    # Sensitivity, hit rate, recall, or true positive rate
+    TPR = np.float64(TP)/(TP+FN)
+    # Specificity or true negative rate
+    TNR = np.float64(TN)/(TN+FP) 
+    # Precision or positive predictive value
+    PPV = np.float64(TP)/(TP+FP)
+    # Negative predictive value
+    NPV = np.float64(TN)/(TN+FN)
+    # Fall out or false positive rate
+    FPR = np.float64(FP)/(FP+TN)
+    # False negative rate
+    FNR = np.float64(FN)/(TP+FN)
+    # False discovery rate
+    FDR = np.float64(FP)/(TP+FP)
+    # Overall accuracy
+    ACC = np.float64(TP+TN)/(TP+FP+FN+TN)
+
+    print('TP={}\nTN={}\nFP={}\nFN={}'.format(TP,TN,FP,FN))
     print('Sensitivity=',TPR)
     print('Specificity=',TNR)
     print('PPV=',PPV)
@@ -590,35 +623,24 @@ def getfinaloutputSepMultiGAN(inputFile, outName, genelist, final_test_df_sig_re
     # venn2(subsets = (synth_alone, real_alone, overlap), set_labels = ('Synthetic', 'Real'), set_colors=('red', 'skyblue'))
     # plt.title('Venn')
     # fig.savefig(outName+'_venn.pdf')
-    # fig.clear()
+    # #fig.clear()
     # plt.close()
     return(confusionMat(TPR,TNR,PPV,NPV,FPR,FNR,FDR,ACC))
 
 
-def SepMultirunGAN(inputFileName, popFileName, outName, numberC0, numberC1, 
-                   epochs, batchsize0, batchsize1, alphaGAN, minGE, minfold,
-                   numbOfNetworks, numNetworkCutoff, useDESeq, saveTrained,
-                   saveSynthExpr, seed=None):
+def SepMultirunGAN(inputFileName, popFileName, outName,
+                   epochs, batchsize0, batchsize1, minExprMean, minExprDev,
+                   numbOfNetworks, isLogNorm, useDESeq, saveTrained, saveSynthExpr, 
+                   seed=None):
     """
-    SepMultirunGAN : Performs diff exp testing between GAN gene lists
-    :param inputFileName: Name of CSV expression table with two phenotypes to train GAN
-    :param popFileName: Name of CSV expression table with large population cohort for rescaling synth values
-    :param outName: Prefix of output file names
-    :param numberC0: Number of samples to select from test condition 0
-    :param numberC1: Number of samples to select from test condition 1
+    runGAN : Performs diff exp testing between GAN gene lists
     :param epochs: Number of epochs to train GAN
     :param batchsize0: Number of synthetic samples to generate for condition 0
     :param batchsize1: Number of synthetic samples to generate for condition 1
-    :param alphaGAN: significance value to use for t-test of synthetic datasets
-    :param minGE: Minimum difference in avg expr value to be considered significant
-    :param minfold: Minimum log2fold change to be considered significant 
-    :param numbOfNetworks: Number of separate GANs to train for bagging approach
-    :param numNetworkCutoff: Number of GANs a gene must be DE in to be reported
-    :param useDESeq: Use DESeq method rather than edgeR to compute DE sig values
-    :param saveTrained: Save trained GANs
-    :param saveSynthExpr: Save a synthetic expression table
-    :param seed: Seed for RNG operations
+    :param minExprMean: Remove genes from input data with mean expression less than value
+    :param minExprDev: Remove genes from input data with average absolute deviation less than value
     """
+
     df_combined = pd.DataFrame(columns=['pvalue', 'padj', 'lfc', 'delta'])
     # Load Data
     inputFile = pd.read_csv(inputFileName) 
@@ -634,60 +656,110 @@ def SepMultirunGAN(inputFileName, popFileName, outName, numberC0, numberC1,
     df = df.groupby([df.index]).sum()
     df = pd.concat([pd.DataFrame(cancerID).T, df])
 
+    #numberC0 = sum(df.iloc[0]==0)
+    numberC0 = -1
+    #numberC1 = sum(df.iloc[0]==1)
+    numberC1 = -1
+
+    #Set first index name to "Group"
+    df = df.rename(index={df.index[0]: 'Group'})
+
+    #Filter input by mean and avg absolute deviation of expression:
+    df = df[((df.mean(axis=1) > minExprMean) & 
+             (abs(df.sub(df.mean(axis=1), axis=0)).mean(axis=1) > minExprDev)) | 
+            (df.index =='Group')]
+
+    if isLogNorm: #log2 normalize and apply logistic sigmoid scaling
+        #df = df.applymap(lambda x: np.log2(x)) #Removed, only accept log(CPM) input
+        #df.iloc[1:,:] = df.iloc[1:,:].applymap(lambda x: expit(x)) #logistic function
+        # set min of all genes to 0, saving offsets
+        # normalize all gene to 0-1, saving max values
+        geneMins = df.iloc[1:,:].min(axis=1)
+        df.iloc[1:,:] = df.iloc[1:,:].sub(geneMins, axis='rows')
+        geneScale = df.iloc[1:,:].max(axis='columns')
+        df.iloc[1:,:] = df.iloc[1:,:].div(geneScale, axis='rows')
+        #df = df.dropna()
+
+    # #Split df into training and validation sets
+    # dfTrain, dfValid = train_test_split(df.T, test_size=0.5, random_state=seed, stratify=df.loc['Group'])
+
+    # if numberC0 == -1 and numberC1 == -1:
+    #     #Using all samples, don't employ train/validation split
+    #     df = df
+    #     dfValid = df
+    # else:
+    #     #Only use training samples for training GAN, validation samples for gold standard DE results
+    #     df = dfTrain.T
+    #     dfValid = dfValid.T
+
     if numberC0<=0:
         numberC0 = sum(df.iloc[0]==0)
         
     if numberC1<=0:
         numberC1 = sum(df.iloc[0]==1)
 
-    if alphaGAN<=0:
-        alphaGAN = 0.05 #1.25e-8/(len(df)-1)
-
     # Format input data for training GAN
     expr_train0, todrop0 = formatdataforgen(df, 0, numberC0, seed) #condition, number of samples to train on
-    expr_train1, todrop1 = formatdataforgen(df, 1, numberC1, seed)
+    expr_train1, todrop1 = formatdataforgen(df, 1, numberC1, seed) 
     expr_train0 = expr_train0.drop(todrop0 + todrop1, axis=1, errors='ignore')
     expr_train1 = expr_train1.drop(todrop0 + todrop1, axis=1, errors='ignore')
 
     #Load population data
-    popDf = pd.read_csv(popFileName) 
+    if not popFileName: # Use training data as population for RF classifier
+        popDf = df.drop('Group')
+    else:
+        popDf = pd.read_csv(popFileName)
+        popDf = popDf.set_index(popDf.columns[0])
     if popDf.isnull().values.any():
         print('WARNING: NaN expression values detected in population data, removing automatically')
         popDf = popDf.dropna()
 
     # Merge duplicate gene names
-    popDf = popDf.set_index(popDf.columns[0])
-    popCancerID = popDf.iloc[0]
-    popDf = popDf.drop(index = popDf.index[0])
     popDf = popDf.groupby([popDf.index]).sum()
-    popDf = pd.concat([pd.DataFrame(popCancerID).T, popDf])
     commonGenes = popDf.index.intersection(expr_train0.columns)
     popDf = popDf.loc[commonGenes]
     expr_train0 = expr_train0[commonGenes]
     expr_train1 = expr_train1[commonGenes]
     
-    # Train RF classifier
-    labels = np.array([0]*numberC0 + [1]*numberC1)
-    features = np.array(pd.concat([expr_train0, expr_train1], ignore_index=True))
-    
-    # Instantiate model with 1000 decision trees
-    rf = RandomForestClassifier(n_estimators = 1000, random_state = seed)
-    # Train the model on training data
-    rf = rf.fit(features, labels)
-    # Using Random Forest classifier, predict population sample class for all population samples
-    rfResults = pd.DataFrame(rf.predict(np.array(popDf.T)))
-    rfResults = rfResults.set_index(popDf.columns)
-    rfResults.columns = ['class']
-    # Make a dataframe of all samples with their associated prediction (forpredict)
-    popClass = pd.concat([rfResults.T, popDf], axis=0)
-    genesMean0 = popClass.loc[:, popClass.iloc[0] == 0].iloc[1:,:].mean(axis=1)
-    genesStd0 = popClass.loc[:, popClass.iloc[0] == 0].iloc[1:,:].std(axis=1)
-    genesMean1 = popClass.loc[:, popClass.iloc[0] == 1].iloc[1:,:].mean(axis=1)
-    genesStd1 = popClass.loc[:, popClass.iloc[0] == 1].iloc[1:,:].std(axis=1)
+    if not isLogNorm:
+        # Train RF classifier
+        labels = np.array([0]*numberC0 + [1]*numberC1)
+        features = np.array(pd.concat([expr_train0, expr_train1], ignore_index=True))
+
+        # Instantiate model with 1000 decision trees
+        rf = RandomForestClassifier(n_estimators = 1000, random_state = seed)
+        # Train the model on training data
+        rf = rf.fit(features, labels)
+        # Using Random Forest classifier, predict population sample class for all population samples
+        # First, split population data into training and validation sets
+        rfResults = pd.DataFrame(rf.predict(np.array(popDf.T)))
+        # Ensure some pop samples were assigned to both conditions:
+        if sum(rfResults[0]==0) == 0:
+           print('No population samples assigned to condition 0, aborting.')
+           sys.exit(1)
+        if sum(rfResults[0]==1) == 0:
+           print('No population samples assigned to condition 1, aborting.')
+           sys.exit(1)
+
+        rfResults = rfResults.set_index(popDf.columns)
+        rfResults.columns = ['class']
+        # Make a dataframe of all samples with their associated prediction (forpredict)
+        popClass = pd.concat([rfResults.T, popDf], axis=0)
+        genesMean0 = popClass.loc[:, popClass.iloc[0] == 0].iloc[1:,:].mean(axis=1)
+        genesStd0 = popClass.loc[:, popClass.iloc[0] == 0].iloc[1:,:].std(axis=1)
+        genesMean1 = popClass.loc[:, popClass.iloc[0] == 1].iloc[1:,:].mean(axis=1)
+        genesStd1 = popClass.loc[:, popClass.iloc[0] == 1].iloc[1:,:].std(axis=1)
+        geneMins = None
+        geneScale = None
+    else:
+        genesMean0 = None
+        genesStd0 = None
+        genesMean1 = None
+        genesStd1 = None
     
     # Train ensemble of GANs
     for i in range(numbOfNetworks):
-        print('Network Number', i )
+        # Train GAN on condition 0
         if saveTrained:
             saveName = '{}.trained.cond0.{}'.format(outName,i)
         else:
@@ -698,7 +770,7 @@ def SepMultirunGAN(inputFileName, popFileName, outName, numberC0, numberC1,
         if saveName is not None:
             outDir, fName = saveName.rsplit('/',1)
             ggan.save_model(outDir, fName)        
-        condition_0, genes_condition_0 = gensynthdata(ggan, batchsize0, genesMean0, genesStd0) # Output batch size 
+        condition_0, genes_condition_0 = gensynthdata(ggan, batchsize0, genesMean0, genesStd0, popDf.index, isLogNorm) # Output batch size 
 
         # Train GAN on condition 1
         if saveTrained:
@@ -711,75 +783,62 @@ def SepMultirunGAN(inputFileName, popFileName, outName, numberC0, numberC1,
         if saveName is not None:
             outDir, fName = saveName.rsplit('/',1)
             ggan.save_model(outDir, fName)
-        condition_1, genes_condition_1 = gensynthdata(ggan, batchsize1, genesMean1, genesStd1) # Output batch size 
+        condition_1, genes_condition_1 = gensynthdata(ggan, batchsize1, genesMean1, genesStd1, popDf.index, isLogNorm) # Output batch size 
 
         #Perform significance testing
         sorted_condition_0 = formatforsigtestingbycondition(condition_0, genes_condition_0)
         sorted_condition_1 = formatforsigtestingbycondition(condition_1, genes_condition_1)
-        pvalues = performsigtesting(sorted_condition_0, sorted_condition_1, '{}_{}'.format(outName,i), useDESeq)
-        final_df_temp = Cleanupsiggenelist(pvalues, alphaGAN, minGE, minfold)
+        #Pass validation set to DE testing function
+        pvalues = performsigtesting(sorted_condition_0, sorted_condition_1, '{}_{}'.format(outName,i), useDESeq, geneMins, geneScale, isLogNorm) 
+        final_df_temp = pvalues #No longer filtering by pval, etc., will use avg. rank at end
 
-        df_combined = pd.concat([df_combined, final_df_temp])  
+        df_combined = pd.concat([df_combined, final_df_temp])
+        print('Network Number', i )
 
     if saveSynthExpr:
         exprDf = pd.concat([sorted_condition_0.add_prefix('cond0_'), sorted_condition_1.add_prefix('cond1_')],axis=1)
         exprDf.to_csv(outName+'_synthExpr.csv',index=True,header=True)
-        
+
+    
     dfCounts = pd.DataFrame(df_combined.index.value_counts(), columns=['count'])
     dfRank = pd.DataFrame(df_combined.groupby(level=0)['rank'].mean(), columns=['rank'])
-    gainResult = pd.merge(dfRank, dfCounts, left_index=True, right_index=True)
-    gainResult = gainResult[gainResult['count']>= numNetworkCutoff]
-    # genelist = gainResult.index
+    gainResult = pd.merge(dfCounts, dfRank, left_index=True, right_index=True)
+    # genelist = gainResult.sort_values(by=['rank']).index[:compareN]
     
-    #Genes that pass sig filters, all p-values
-    # final_real_df_sig = Getrealsiggenelist(pReal, alphaReal, minGE, minfold)
-    # train_sig_genes = Getrealsiggenelist(pTrain, alphaGAN, minGE, minfold)
-    # trainDup_sig_genes = Getrealsiggenelist(pTrainDup, alphaGAN, minGE, minfold)
-    # 
-    # print('\nConfusion matrix, synth vs. real')
-    # conReal = getfinaloutputSepMultiGAN(inputFile, outName+'_synth', genelist, final_real_df_sig)
-    # print('\nConfusion matrix, train vs. real')
-    # conTrain = getfinaloutputSepMultiGAN(inputFile, outName+'_train', train_sig_genes.index, final_real_df_sig)
-    # print('\nConfusion matrix, trainDup vs. real')
-    # conTrainDup = getfinaloutputSepMultiGAN(inputFile, outName+'_trainDup', trainDup_sig_genes.index, final_real_df_sig)
-        
     return (gainResult)
-    
-    #TO DO: make rank first column, set cutoff = NON if > NON
 
 
 def main():
-    mapParse = argp.ArgumentParser(description=('GAiN generates large synthetic cohorts using small training sets of gene expression data from samples of two different phenotypes (0 and 1).  It then performs differential expression (DE) analysis on the synthetic cohorts, returning a list of candidate DE genes.'))
-    mapParse.add_argument('--version', action='version', version='%(prog)s '+__version__)
-    #mapParse.add_argument('-s','--samplenums', type=int, nargs=2, default=[-1, -1], metavar=('C0', 'C1'), help='Number of samples from each condition to use in training GAN (set to -1 to use all from a condition) [-1 -1]')
+    mapParse = argp.ArgumentParser(description=('GAiN generates large synthetic cohorts using sparse training sets of gene expression data from samples of two different phenotypes.  It then performs differential expression (DE) analysis on the synthetic cohorts, returning a list of candidate DE genes.'))
     mapParse.add_argument('-b','--batchsizes', type=int, nargs=2, default=[500, 500], metavar=('C0', 'C1'), help='Size of synthetic cohort to generate for each condition [500 500]')
-    mapParse.add_argument('-e','--epochs', type=int, default=100, help='Number of epochs for training [100]')
-    mapParse.add_argument('-a','--alphaGAN', type=float, default=-1.0, metavar='ALPHAGAN', help='Adjusted significance threshold for DE genes between synthetic cohorts [.05]')
-    #mapParse.add_argument('--alphaReal', type=float, default=-1.0, metavar='ALPHAREAL', help='Adjusted significance threshold for DE genes between real cohorts [.05]')
-    mapParse.add_argument('--minGE', type=float, metavar='GE', default=0, help='Minimum absolute difference in average expression between the conditions for a gene to be reported [0]')
-    mapParse.add_argument('--minLFC', type=float, metavar='LFC', default=0, help='Minimum log2 fold change in expression between the conditions for a gene to be reported [0]')
-    mapParse.add_argument('--numbOfNetworks', type=int, metavar='NON', default=10, help='Number of networks to use for bagging [10]')
-    mapParse.add_argument('--numNetworkCutoff', type=int, metavar='NNC', default=-1, help='Number of networks gene must be sig. DE in [NON]')
+    mapParse.add_argument('-e','--epochs', type=int, default=500, help='Number of epochs for training [500]')
+#    mapParse.add_argument('-a','--alphaGAN', type=float, default=-1.0, metavar='ALPHAGAN', help='Adjusted significance threshold for DE genes between synthetic cohorts [.05]')
+#    mapParse.add_argument('--alphaReal', type=float, default=-1.0, metavar='ALPHAREAL', help='Adjusted significance threshold for DE genes between real cohorts [.05]')
+#    mapParse.add_argument('--minGE', type=float, metavar='GE', default=10, help='Minimum absolute difference in average expression between the conditions for a gene to be reported [10]')
+#    mapParse.add_argument('--minLFC', type=float, metavar='LFC', default=1, help='Minimum log2 fold change in expression between the conditions for a gene to be reported [1]')
+    mapParse.add_argument('--minExprMean', type=int, default=10, help='Minimum mean expression for gene to be modeled [10]')
+    mapParse.add_argument('--minExprMAD', type=int, default=10, help='Minimum mean absolute deviation of expression for gene to be modeled [10]')
+    mapParse.add_argument('--numbOfNetworks', type=int, metavar='NON', default=20, help='Number of networks [20]')
+#    mapParse.add_argument('--numNetworkCutoff', type=int, metavar='NNC', default=20, help='Number of networks cutoff [20]')
     mapParse.add_argument('--deseq', action='store_true', help="Use DESeq2 method for DE significance calculations (edgeR is default)")
     mapParse.add_argument('--save', action='store_true', help="Saved trained models for later use")
-    mapParse.add_argument('--synth', action='store_true', help="Save synthetic expression tables")
     mapParse.add_argument('--seed', type=int, help='Optional random seed for sampling training cases')
     mapParse.add_argument('-q', '--quiet', action='store_true', help="Limit program output")
+    mapParse.add_argument('--synth', action='store_true', help="Save synthetic expression tables")
+    mapParse.add_argument('-p', '--popCSV', type=str, default='', help="Population expression table in CSV format")
     mapParse.add_argument('-o','--outname', type=str, default='./GAiN', help='Prefix for output filenames [./GAiN]')
     mapParse.add_argument('inputCSV', metavar='input.csv', help="Training expression table in CSV format")
-    mapParse.add_argument('popCSV', metavar='population.csv', help="Population expression table in CSV format")
     args = mapParse.parse_args()
+    
+    print(args) #TO DO remove
     
     global quiet 
     quiet = args.quiet
     if quiet:
-        #tf.get_logger().setLevel('ERROR')
-        tf.logging.set_verbosity(tf.logging.ERROR)
+        tf.get_logger().setLevel('ERROR')
     else:
         deprecation._PRINT_DEPRECATION_WARNINGS = True
         
-    if (args.numNetworkCutoff > args.numbOfNetworks) or (args.numNetworkCutoff < 0):
-        args.numNetworkCutoff = args.numbOfNetworks
 
     outDir = os.path.dirname(args.outname)
     if not outDir:
@@ -790,28 +849,23 @@ def main():
         sys.exit(1)
     
     #See above parameters for arguments
-    counts_df = SepMultirunGAN(args.inputCSV,
-                               args.popCSV,
-                               args.outname,
-                               -1, #args.samplenums[0],
-                               -1, #args.samplenums[1],
-                               args.epochs,
-                               args.batchsizes[0],
-                               args.batchsizes[1],
-                               args.alphaGAN, #args.alphaReal,
-                               args.minGE,
-                               args.minLFC,
-                               args.numbOfNetworks, 
-                               args.numNetworkCutoff,
-                               args.deseq,
-                               args.save,
-                               args.synth,
-                               seed=args.seed)
-    #Write CSV with genelist
-    counts_df = counts_df.rename_axis('Gene')
-    counts_df.columns = ['AvgRank','NumNetworks']
-    counts_df.to_csv(args.outname+"_DE_genes.csv", index = True, header = True)
-    # final_test_df_sig_real.to_csv(args.outname+"_DE_real.csv", index = True, header=True)
+    final_test_df_sig_real = SepMultirunGAN(args.inputCSV,
+                                                      args.popCSV,
+                                                      args.outname,
+                                                      args.epochs,
+                                                      args.batchsizes[0],
+                                                      args.batchsizes[1],
+                                                      args.minExprMean,
+                                                      args.minExprMAD,
+                                                      args.numbOfNetworks, 
+                                                      False,
+                                                      args.deseq,
+                                                      args.save,
+                                                      args.synth,
+                                                      seed=args.seed)
+    #Write CSV with genelists
+    # counts_df.to_csv(args.outname+"_counts_df.csv", index = True, header=False)
+    final_test_df_sig_real.to_csv(args.outname+"_DE_gene_list.csv", index = True, header=True)
 
     
 if __name__=="__main__":

@@ -641,6 +641,10 @@ def SepMultirunGAN(inputFileName, popFileName, outName,
     :param minExprDev: Remove genes from input data with average absolute deviation less than value
     """
 
+    if seed is not None:
+        np.random.seed(seed)
+        keras.utils.set_random_seed(seed)
+
     df_combined = pd.DataFrame(columns=['pvalue', 'padj', 'lfc', 'delta'])
     # Load Data
     inputFile = pd.read_csv(inputFileName) 
@@ -818,15 +822,15 @@ def main():
 #    mapParse.add_argument('--minLFC', type=float, metavar='LFC', default=1, help='Minimum log2 fold change in expression between the conditions for a gene to be reported [1]')
     mapParse.add_argument('--minExprMean', type=int, default=10, help='Minimum mean expression for gene to be modeled [10]')
     mapParse.add_argument('--minExprMAD', type=int, default=10, help='Minimum mean absolute deviation of expression for gene to be modeled [10]')
-    mapParse.add_argument('--numbOfNetworks', type=int, metavar='NON', default=20, help='Number of networks [20]')
+    mapParse.add_argument('--numbOfNetworks', type=int, metavar='NON', default=5, help='Number of networks [5]')
 #    mapParse.add_argument('--numNetworkCutoff', type=int, metavar='NNC', default=20, help='Number of networks cutoff [20]')
     mapParse.add_argument('--deseq', action='store_true', help="Use DESeq2 method for DE significance calculations (edgeR is default)")
     mapParse.add_argument('--save', action='store_true', help="Saved trained models for later use")
     mapParse.add_argument('--seed', type=int, help='Optional random seed for sampling training cases')
     mapParse.add_argument('-q', '--quiet', action='store_true', help="Limit program output")
     mapParse.add_argument('--synth', action='store_true', help="Save synthetic expression tables")
-    mapParse.add_argument('-p', '--popCSV', type=str, default='', help="Population expression table in CSV format")
     mapParse.add_argument('-o','--outname', type=str, default='./GAiN', help='Prefix for output filenames [./GAiN]')
+    mapParse.add_argument('-p', '--popCSV', type=str, default='', help="Population expression table in CSV format")
     mapParse.add_argument('inputCSV', metavar='input.csv', help="Training expression table in CSV format")
     args = mapParse.parse_args()
     
@@ -865,7 +869,8 @@ def main():
                                                       seed=args.seed)
     #Write CSV with genelists
     # counts_df.to_csv(args.outname+"_counts_df.csv", index = True, header=False)
-    final_test_df_sig_real.to_csv(args.outname+"_DE_gene_list.csv", index = True, header=True)
+    
+    final_test_df_sig_real.sort_values('rank').to_csv(args.outname+"_DE_gene_list.csv", index = True, header=True)
 
     
 if __name__=="__main__":

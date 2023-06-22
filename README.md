@@ -28,10 +28,10 @@ $PATH_TO_GAIN/GAiN -h
 ## Parameters
 Running GAiN with the -h option (or --help) will print a desciption of its optional and required input arguments. A description of each follows.
 ```
-GAiN [-h] [--version] [-b C0 C1] [-e EPOCHS] [-a ALPHAGAN] [--minGE GE]
-     [--minLFC LFC] [--numbOfNetworks NON] [--numNetworkCutoff NNC]
-     [--deseq] [--save] [--synth] [--seed SEED] [-q] [-o OUTNAME]
-     input.csv population.csv
+GAiN [-h] [-b C0 C1] [-e EPOCHS] [--minExprMean MINEXPRMEAN]
+     [--minExprMAD MINEXPRMAD] [--numbOfNetworks NON] [--deseq] [--save]
+     [--seed SEED] [-q] [--synth] [-o OUTNAME] [-p POPCSV]
+     input.csv
 ```
 ### Optional arguments
 - -h, --help  
@@ -42,28 +42,26 @@ GAiN [-h] [--version] [-b C0 C1] [-e EPOCHS] [-a ALPHAGAN] [--minGE GE]
      Size of synthetic cohort to generate for each condition (default: 500 500)
 - -e EPOCHS, --epochs EPOCHS  
      Number of epochs for training model (default: 100)
-- -a ALPHA, --alphaGAN ALPHA  
-     Significance threshold for reporting genes as DE between the synthetic groups (default: 0.05)
-- --minGE GE  
-     Minimum absolute difference in average expression between the synthetic groups for a gene to be reported as DE (default: 0)
-- --minLFC LFC  
-     Minimum log2 fold change in expression between the synthetic groups for a gene to be reported as DE (default: 0)
+- --minExprMean MINEXPRMEAN
+     Minimum mean expression for genes to be modeled [10]
+  --minExprMAD MINEXPRMAD
+     Minimum mean absolute deviation of expression for genes to be modeled [10]
 - --numbOfNetworks NON  
-     Number of networks to use for bagging (default: 10)
-- --numNetworkCutoff NNC  
-     Number of networks gene must be significantly DE in (default: NON)
+     Number of networks to use for bagging (default: 5)
 - --deseq  
      Use DESeq2 method for DE significance calculations (default: use edgeR)
 - --save  
      Save trained models for later use
-- --synth  
-     Save synthetic expression tables
 - --seed SEED    
      Optional seed for random sampling of the training sets
 - -q, --quiet  
      Run in quiet mode, limiting program output
+- --synth  
+     Save synthetic expression tables
 - -o OUTNAME, --outname OUTNAME  
      Prefix for output filenames (default: ./GAiN)
+- -p POPCSV, --popCSV POPCSV
+     Population expression table in CSV format (if not provided, input.csv will be used as population cohort)
 
 ### Input files
 - input.csv  
@@ -83,8 +81,8 @@ gunzip example/example_population.csv.gz
 GAiN \
         -o test \
 	--seed 42 \
-	example/example_input.csv \
-	example/example_population.csv
+	-p example/example_population.csv \
+	example/example_input.csv
 ```
 The results of this execution can be compared with the results file example/example_result_DE_genes.csv.
 
@@ -115,7 +113,7 @@ To run GAiN using docker on the example provided, use the following command:
 docker run -v $PATH_TO_OUTPUT:/gain_out mjinkm/gain GAiN \
         -o /gain_out/test \
 	--seed 42 \
-	/opt/GAiN/example/example_input.csv \
-	/opt/GAiN/example/example_population.csv
+	-p /opt/GAiN/example/example_population.csv
+	/opt/GAiN/example/example_input.csv
 ```
 where `PATH_TO_OUTPUT` is the desired local output directory.

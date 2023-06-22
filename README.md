@@ -113,7 +113,7 @@ To run GAiN using docker on the example provided, use the following command:
 docker run -v $PATH_TO_OUTPUT:/gain_out mjinkm/gain GAiN \
         -o /gain_out/test \
 	--seed 42 \
-	-p /opt/GAiN/example/example_population.csv
+	-p /opt/GAiN/example/example_population.csv \
 	/opt/GAiN/example/example_input.csv
 ```
 where `PATH_TO_OUTPUT` is the desired local output directory.
